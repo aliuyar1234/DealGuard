@@ -7,7 +7,7 @@ This API provides a chat interface that integrates:
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dealguard.api.deps import get_current_user, get_db
+from dealguard.api.deps import get_current_user, get_db, get_user_settings
 from dealguard.api.ratelimit import limiter, RATE_LIMIT_AI
 from dealguard.domain.chat import ChatService, ChatMessage
 from dealguard.infrastructure.auth.provider import AuthUser
@@ -71,7 +71,7 @@ class ChatResponse(BaseModel):
         None,
         description="Summarized results from tool executions",
     )
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class SimpleMessageRequest(BaseModel):
@@ -81,30 +81,6 @@ class SimpleMessageRequest(BaseModel):
 
 
 # ----- API Endpoints -----
-
-
-async def get_user_settings(db: AsyncSession, user_id: str) -> dict:
-    """Get user settings from database with decrypted API keys."""
-    from sqlalchemy import text
-    from dealguard.shared.crypto import decrypt_secret, is_encrypted
-
-    result = await db.execute(
-        text("SELECT settings FROM users WHERE id = :user_id"),
-        {"user_id": user_id},
-    )
-    row = result.fetchone()
-    if row and row[0]:
-        settings = dict(row[0])
-        # Decrypt API keys if they are encrypted
-        for key in ["anthropic_api_key", "deepseek_api_key"]:
-            if key in settings and settings[key] and is_encrypted(settings[key]):
-                try:
-                    settings[key] = decrypt_secret(settings[key])
-                except ValueError:
-                    logger.warning(f"Failed to decrypt {key} for user {user_id}")
-                    settings[key] = None
-        return settings
-    return {}
 
 
 @router.post("", response_model=ChatResponse)

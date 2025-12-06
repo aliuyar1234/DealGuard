@@ -11,7 +11,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.api.deps import get_db, get_current_user
@@ -41,6 +41,8 @@ router = APIRouter(prefix="/proactive", tags=["Proactive AI-Jurist"])
 
 # Deadline schemas
 class DeadlineResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     contract_id: UUID
     contract_filename: str | None = None
@@ -55,9 +57,6 @@ class DeadlineResponse(BaseModel):
     is_verified: bool
     status: str
     notes: str | None
-
-    class Config:
-        from_attributes = True
 
 
 class DeadlineStatsResponse(BaseModel):
@@ -79,6 +78,8 @@ class VerifyDeadlineRequest(BaseModel):
 
 # Alert schemas
 class AlertResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     source_type: str
     source_id: UUID | None
@@ -96,9 +97,6 @@ class AlertResponse(BaseModel):
     snoozed_until: datetime | None
     due_date: date | None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class AlertStatsResponse(BaseModel):
@@ -145,6 +143,8 @@ class RiskRadarResponse(BaseModel):
 
 
 class RiskSnapshotResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     snapshot_date: date
     overall_risk_score: int
@@ -158,8 +158,53 @@ class RiskSnapshotResponse(BaseModel):
     pending_deadlines: int
     open_alerts: int
 
-    class Config:
-        from_attributes = True
+
+# ─────────────────────────────────────────────────────────────
+#                     HELPER FUNCTIONS
+# ─────────────────────────────────────────────────────────────
+
+
+def _deadline_to_response(d) -> DeadlineResponse:
+    """Convert deadline model to response."""
+    return DeadlineResponse(
+        id=d.id,
+        contract_id=d.contract_id,
+        contract_filename=d.contract.filename if d.contract else None,
+        deadline_type=d.deadline_type.value if isinstance(d.deadline_type, DeadlineType) else d.deadline_type,
+        deadline_date=d.deadline_date,
+        days_until=d.days_until,
+        is_overdue=d.is_overdue,
+        needs_attention=d.needs_attention,
+        reminder_days_before=d.reminder_days_before,
+        source_clause=d.source_clause,
+        confidence=d.confidence,
+        is_verified=d.is_verified,
+        status=d.status.value if isinstance(d.status, DeadlineStatus) else d.status,
+        notes=d.notes,
+    )
+
+
+def _alert_to_response(a) -> AlertResponse:
+    """Convert alert model to response."""
+    return AlertResponse(
+        id=a.id,
+        source_type=a.source_type.value if isinstance(a.source_type, AlertSourceType) else a.source_type,
+        source_id=a.source_id,
+        alert_type=a.alert_type.value if isinstance(a.alert_type, AlertType) else a.alert_type,
+        severity=a.severity.value if isinstance(a.severity, AlertSeverity) else a.severity,
+        title=a.title,
+        description=a.description,
+        ai_recommendation=a.ai_recommendation,
+        recommended_actions=a.recommended_actions or [],
+        related_contract_id=a.related_contract_id,
+        related_contract_filename=a.related_contract.filename if a.related_contract else None,
+        related_partner_id=a.related_partner_id,
+        related_partner_name=a.related_partner.name if a.related_partner else None,
+        status=a.status.value if isinstance(a.status, AlertStatus) else a.status,
+        snoozed_until=a.snoozed_until,
+        due_date=a.due_date,
+        created_at=a.created_at,
+    )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -185,25 +230,7 @@ async def list_deadlines(
         overdue = await service.get_overdue_deadlines() if include_overdue else []
         deadlines = list(overdue) + list(upcoming)
 
-    return [
-        DeadlineResponse(
-            id=d.id,
-            contract_id=d.contract_id,
-            contract_filename=d.contract.filename if d.contract else None,
-            deadline_type=d.deadline_type.value if isinstance(d.deadline_type, DeadlineType) else d.deadline_type,
-            deadline_date=d.deadline_date,
-            days_until=d.days_until,
-            is_overdue=d.is_overdue,
-            needs_attention=d.needs_attention,
-            reminder_days_before=d.reminder_days_before,
-            source_clause=d.source_clause,
-            confidence=d.confidence,
-            is_verified=d.is_verified,
-            status=d.status.value if isinstance(d.status, DeadlineStatus) else d.status,
-            notes=d.notes,
-        )
-        for d in deadlines
-    ]
+    return [_deadline_to_response(d) for d in deadlines]
 
 
 @router.get("/deadlines/stats", response_model=DeadlineStatsResponse)
@@ -242,23 +269,7 @@ async def mark_deadline_handled(
         raise HTTPException(status_code=404, detail="Deadline not found")
 
     await db.commit()
-
-    return DeadlineResponse(
-        id=deadline.id,
-        contract_id=deadline.contract_id,
-        contract_filename=deadline.contract.filename if deadline.contract else None,
-        deadline_type=deadline.deadline_type.value if isinstance(deadline.deadline_type, DeadlineType) else deadline.deadline_type,
-        deadline_date=deadline.deadline_date,
-        days_until=deadline.days_until,
-        is_overdue=deadline.is_overdue,
-        needs_attention=deadline.needs_attention,
-        reminder_days_before=deadline.reminder_days_before,
-        source_clause=deadline.source_clause,
-        confidence=deadline.confidence,
-        is_verified=deadline.is_verified,
-        status=deadline.status.value if isinstance(deadline.status, DeadlineStatus) else deadline.status,
-        notes=deadline.notes,
-    )
+    return _deadline_to_response(deadline)
 
 
 @router.post("/deadlines/{deadline_id}/dismiss", response_model=DeadlineResponse)
@@ -279,23 +290,7 @@ async def dismiss_deadline(
         raise HTTPException(status_code=404, detail="Deadline not found")
 
     await db.commit()
-
-    return DeadlineResponse(
-        id=deadline.id,
-        contract_id=deadline.contract_id,
-        contract_filename=deadline.contract.filename if deadline.contract else None,
-        deadline_type=deadline.deadline_type.value if isinstance(deadline.deadline_type, DeadlineType) else deadline.deadline_type,
-        deadline_date=deadline.deadline_date,
-        days_until=deadline.days_until,
-        is_overdue=deadline.is_overdue,
-        needs_attention=deadline.needs_attention,
-        reminder_days_before=deadline.reminder_days_before,
-        source_clause=deadline.source_clause,
-        confidence=deadline.confidence,
-        is_verified=deadline.is_verified,
-        status=deadline.status.value if isinstance(deadline.status, DeadlineStatus) else deadline.status,
-        notes=deadline.notes,
-    )
+    return _deadline_to_response(deadline)
 
 
 @router.post("/deadlines/{deadline_id}/verify", response_model=DeadlineResponse)
@@ -316,23 +311,7 @@ async def verify_deadline(
         raise HTTPException(status_code=404, detail="Deadline not found")
 
     await db.commit()
-
-    return DeadlineResponse(
-        id=deadline.id,
-        contract_id=deadline.contract_id,
-        contract_filename=deadline.contract.filename if deadline.contract else None,
-        deadline_type=deadline.deadline_type.value if isinstance(deadline.deadline_type, DeadlineType) else deadline.deadline_type,
-        deadline_date=deadline.deadline_date,
-        days_until=deadline.days_until,
-        is_overdue=deadline.is_overdue,
-        needs_attention=deadline.needs_attention,
-        reminder_days_before=deadline.reminder_days_before,
-        source_clause=deadline.source_clause,
-        confidence=deadline.confidence,
-        is_verified=deadline.is_verified,
-        status=deadline.status.value if isinstance(deadline.status, DeadlineStatus) else deadline.status,
-        notes=deadline.notes,
-    )
+    return _deadline_to_response(deadline)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -365,29 +344,7 @@ async def list_alerts(
     )
 
     alerts = await service.list_alerts(filter=filter_obj, offset=offset, limit=limit)
-
-    return [
-        AlertResponse(
-            id=a.id,
-            source_type=a.source_type.value if isinstance(a.source_type, AlertSourceType) else a.source_type,
-            source_id=a.source_id,
-            alert_type=a.alert_type.value if isinstance(a.alert_type, AlertType) else a.alert_type,
-            severity=a.severity.value if isinstance(a.severity, AlertSeverity) else a.severity,
-            title=a.title,
-            description=a.description,
-            ai_recommendation=a.ai_recommendation,
-            recommended_actions=a.recommended_actions or [],
-            related_contract_id=a.related_contract_id,
-            related_contract_filename=a.related_contract.filename if a.related_contract else None,
-            related_partner_id=a.related_partner_id,
-            related_partner_name=a.related_partner.name if a.related_partner else None,
-            status=a.status.value if isinstance(a.status, AlertStatus) else a.status,
-            snoozed_until=a.snoozed_until,
-            due_date=a.due_date,
-            created_at=a.created_at,
-        )
-        for a in alerts
-    ]
+    return [_alert_to_response(a) for a in alerts]
 
 
 @router.get("/alerts/stats", response_model=AlertStatsResponse)
@@ -436,26 +393,7 @@ async def get_alert(
     # Mark as seen when viewed
     await service.mark_seen(alert_id)
     await db.commit()
-
-    return AlertResponse(
-        id=alert.id,
-        source_type=alert.source_type.value if isinstance(alert.source_type, AlertSourceType) else alert.source_type,
-        source_id=alert.source_id,
-        alert_type=alert.alert_type.value if isinstance(alert.alert_type, AlertType) else alert.alert_type,
-        severity=alert.severity.value if isinstance(alert.severity, AlertSeverity) else alert.severity,
-        title=alert.title,
-        description=alert.description,
-        ai_recommendation=alert.ai_recommendation,
-        recommended_actions=alert.recommended_actions or [],
-        related_contract_id=alert.related_contract_id,
-        related_contract_filename=alert.related_contract.filename if alert.related_contract else None,
-        related_partner_id=alert.related_partner_id,
-        related_partner_name=alert.related_partner.name if alert.related_partner else None,
-        status=alert.status.value if isinstance(alert.status, AlertStatus) else alert.status,
-        snoozed_until=alert.snoozed_until,
-        due_date=alert.due_date,
-        created_at=alert.created_at,
-    )
+    return _alert_to_response(alert)
 
 
 @router.post("/alerts/{alert_id}/resolve", response_model=AlertResponse)
@@ -477,26 +415,7 @@ async def resolve_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
 
     await db.commit()
-
-    return AlertResponse(
-        id=alert.id,
-        source_type=alert.source_type.value if isinstance(alert.source_type, AlertSourceType) else alert.source_type,
-        source_id=alert.source_id,
-        alert_type=alert.alert_type.value if isinstance(alert.alert_type, AlertType) else alert.alert_type,
-        severity=alert.severity.value if isinstance(alert.severity, AlertSeverity) else alert.severity,
-        title=alert.title,
-        description=alert.description,
-        ai_recommendation=alert.ai_recommendation,
-        recommended_actions=alert.recommended_actions or [],
-        related_contract_id=alert.related_contract_id,
-        related_contract_filename=alert.related_contract.filename if alert.related_contract else None,
-        related_partner_id=alert.related_partner_id,
-        related_partner_name=alert.related_partner.name if alert.related_partner else None,
-        status=alert.status.value if isinstance(alert.status, AlertStatus) else alert.status,
-        snoozed_until=alert.snoozed_until,
-        due_date=alert.due_date,
-        created_at=alert.created_at,
-    )
+    return _alert_to_response(alert)
 
 
 @router.post("/alerts/{alert_id}/dismiss", response_model=AlertResponse)
@@ -517,26 +436,7 @@ async def dismiss_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
 
     await db.commit()
-
-    return AlertResponse(
-        id=alert.id,
-        source_type=alert.source_type.value if isinstance(alert.source_type, AlertSourceType) else alert.source_type,
-        source_id=alert.source_id,
-        alert_type=alert.alert_type.value if isinstance(alert.alert_type, AlertType) else alert.alert_type,
-        severity=alert.severity.value if isinstance(alert.severity, AlertSeverity) else alert.severity,
-        title=alert.title,
-        description=alert.description,
-        ai_recommendation=alert.ai_recommendation,
-        recommended_actions=alert.recommended_actions or [],
-        related_contract_id=alert.related_contract_id,
-        related_contract_filename=alert.related_contract.filename if alert.related_contract else None,
-        related_partner_id=alert.related_partner_id,
-        related_partner_name=alert.related_partner.name if alert.related_partner else None,
-        status=alert.status.value if isinstance(alert.status, AlertStatus) else alert.status,
-        snoozed_until=alert.snoozed_until,
-        due_date=alert.due_date,
-        created_at=alert.created_at,
-    )
+    return _alert_to_response(alert)
 
 
 @router.post("/alerts/{alert_id}/snooze", response_model=AlertResponse)
@@ -557,26 +457,7 @@ async def snooze_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
 
     await db.commit()
-
-    return AlertResponse(
-        id=alert.id,
-        source_type=alert.source_type.value if isinstance(alert.source_type, AlertSourceType) else alert.source_type,
-        source_id=alert.source_id,
-        alert_type=alert.alert_type.value if isinstance(alert.alert_type, AlertType) else alert.alert_type,
-        severity=alert.severity.value if isinstance(alert.severity, AlertSeverity) else alert.severity,
-        title=alert.title,
-        description=alert.description,
-        ai_recommendation=alert.ai_recommendation,
-        recommended_actions=alert.recommended_actions or [],
-        related_contract_id=alert.related_contract_id,
-        related_contract_filename=alert.related_contract.filename if alert.related_contract else None,
-        related_partner_id=alert.related_partner_id,
-        related_partner_name=alert.related_partner.name if alert.related_partner else None,
-        status=alert.status.value if isinstance(alert.status, AlertStatus) else alert.status,
-        snoozed_until=alert.snoozed_until,
-        due_date=alert.due_date,
-        created_at=alert.created_at,
-    )
+    return _alert_to_response(alert)
 
 
 @router.post("/alerts/mark-all-seen", response_model=dict)

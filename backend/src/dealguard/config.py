@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default IDs for single-tenant mode (self-hosted)
@@ -100,6 +100,23 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        """Ensure secure settings in production environment."""
+        if self.is_production:
+            # Dev auth is not allowed in production
+            if self.auth_provider == "dev":
+                raise ValueError(
+                    "AUTH_PROVIDER=dev is not allowed in production! "
+                    "Use AUTH_PROVIDER=supabase with proper Supabase configuration."
+                )
+            # Ensure real auth is configured
+            if self.auth_provider == "supabase" and not self.supabase_jwt_secret:
+                raise ValueError(
+                    "SUPABASE_JWT_SECRET must be set in production!"
+                )
+        return self
 
 
 @lru_cache

@@ -2,7 +2,7 @@
 Unit tests for Partner domain (Phase 2).
 """
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -259,7 +259,7 @@ class TestPartnerRiskCalculator:
             )
         ]
         # Need to set created_at for sorting
-        checks[0].created_at = datetime.utcnow()
+        checks[0].created_at = datetime.now(UTC)
 
         score, level = calculator.calculate(checks)
 
@@ -272,7 +272,7 @@ class TestPartnerRiskCalculator:
         calculator = PartnerRiskCalculator()
         partner_id = uuid.uuid4()
         org_id = uuid.uuid4()
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         checks = [
             PartnerCheck(
@@ -321,7 +321,7 @@ class TestPartnerRiskCalculator:
                 score=10,
             ),
         ]
-        checks[0].created_at = datetime.utcnow()
+        checks[0].created_at = datetime.now(UTC)
 
         score, level = calculator.calculate(checks)
 
@@ -341,7 +341,7 @@ class TestPartnerRiskCalculator:
                 score=100,  # Sanction hit!
             ),
         ]
-        checks[0].created_at = datetime.utcnow()
+        checks[0].created_at = datetime.now(UTC)
 
         score, level = calculator.calculate(checks)
 
@@ -352,7 +352,7 @@ class TestPartnerRiskCalculator:
         calculator = PartnerRiskCalculator()
         partner_id = uuid.uuid4()
         org_id = uuid.uuid4()
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         checks = [
             PartnerCheck(
