@@ -61,7 +61,7 @@ async def search_ris(
         else:
             # Fall back to SOAP for non-Bundesrecht
             client = await get_ris_client()
-            soap_results = await client.search(query, law_type, limit)  # type: ignore
+            soap_results = await client.search(query, law_type, limit)
             results = [
                 {
                     "Dokumentnummer": r.document_number,

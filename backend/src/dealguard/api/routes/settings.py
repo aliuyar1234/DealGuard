@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import JSONB
 
-from dealguard.api.deps import get_current_user, get_db
+from dealguard.api.deps import get_current_user, get_db, get_user_settings
 from dealguard.config import get_settings, DEFAULT_ORGANIZATION_ID
 from dealguard.infrastructure.auth.provider import AuthUser
 from dealguard.infrastructure.database.models.user import User
@@ -67,44 +67,6 @@ class SettingsResponse(BaseModel):
 
 
 # ----- Helper Functions -----
-
-
-async def get_user_settings(db: AsyncSession, user_id: str, decrypt_keys: bool = True) -> dict:
-    """Get user settings from database using ORM.
-
-    Args:
-        db: Database session
-        user_id: User ID
-        decrypt_keys: If True, decrypt API keys before returning
-
-    Returns:
-        User settings dict with optionally decrypted API keys
-    """
-    from uuid import UUID
-
-    result = await db.execute(
-        select(User.settings).where(User.id == UUID(user_id))
-    )
-    row = result.scalar_one_or_none()
-    if not row:
-        return {}
-
-    settings = dict(row)
-
-    # Decrypt API keys if requested
-    if decrypt_keys:
-        for key_name in ["anthropic_api_key", "deepseek_api_key"]:
-            if key_name in settings and settings[key_name]:
-                stored_value = settings[key_name]
-                # Only decrypt if it looks encrypted (backward compatibility)
-                if is_encrypted(stored_value):
-                    try:
-                        settings[key_name] = decrypt_secret(stored_value)
-                    except ValueError:
-                        logger.warning(f"Failed to decrypt {key_name} for user {user_id}")
-                        settings[key_name] = None
-
-    return settings
 
 
 async def update_user_settings(db: AsyncSession, user_id: str, updates: dict) -> None:

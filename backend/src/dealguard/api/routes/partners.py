@@ -201,6 +201,35 @@ PartnerCheckServiceDep = Annotated[PartnerCheckService, Depends(get_partner_chec
 # ----- Helper Functions -----
 
 
+def _check_to_response(check) -> PartnerCheckResponse:
+    """Convert PartnerCheck model to response."""
+    return PartnerCheckResponse(
+        id=str(check.id),
+        check_type=check.check_type,
+        status=check.status,
+        score=check.score,
+        result_summary=check.result_summary,
+        provider=check.provider,
+        created_at=check.created_at.isoformat(),
+    )
+
+
+def _alert_to_response(alert) -> PartnerAlertResponse:
+    """Convert PartnerAlert model to response."""
+    return PartnerAlertResponse(
+        id=str(alert.id),
+        alert_type=alert.alert_type,
+        severity=alert.severity,
+        title=alert.title,
+        description=alert.description,
+        source=alert.source,
+        source_url=alert.source_url,
+        is_read=alert.is_read,
+        is_dismissed=alert.is_dismissed,
+        created_at=alert.created_at.isoformat(),
+    )
+
+
 def _partner_to_response(partner, include_details: bool = False) -> PartnerResponse:
     """Convert Partner model to response."""
     response = PartnerResponse(
@@ -228,36 +257,11 @@ def _partner_to_response(partner, include_details: bool = False) -> PartnerRespo
     if include_details:
         # Add checks
         if hasattr(partner, 'checks') and partner.checks:
-            response.checks = [
-                PartnerCheckResponse(
-                    id=str(c.id),
-                    check_type=c.check_type,
-                    status=c.status,
-                    score=c.score,
-                    result_summary=c.result_summary,
-                    provider=c.provider,
-                    created_at=c.created_at.isoformat(),
-                )
-                for c in partner.checks[:10]  # Limit to 10
-            ]
+            response.checks = [_check_to_response(c) for c in partner.checks[:10]]
 
         # Add alerts
         if hasattr(partner, 'alerts') and partner.alerts:
-            response.alerts = [
-                PartnerAlertResponse(
-                    id=str(a.id),
-                    alert_type=a.alert_type,
-                    severity=a.severity,
-                    title=a.title,
-                    description=a.description,
-                    source=a.source,
-                    source_url=a.source_url,
-                    is_read=a.is_read,
-                    is_dismissed=a.is_dismissed,
-                    created_at=a.created_at.isoformat(),
-                )
-                for a in partner.alerts[:10]  # Limit to 10
-            ]
+            response.alerts = [_alert_to_response(a) for a in partner.alerts[:10]]
 
         # Add contract links
         if hasattr(partner, 'contract_links') and partner.contract_links:
@@ -372,21 +376,7 @@ async def get_all_alerts(
 ) -> list[PartnerAlertResponse]:
     """Get all unread alerts for the organization."""
     alerts = await service.get_all_unread_alerts()
-    return [
-        PartnerAlertResponse(
-            id=str(a.id),
-            alert_type=a.alert_type,
-            severity=a.severity,
-            title=a.title,
-            description=a.description,
-            source=a.source,
-            source_url=a.source_url,
-            is_read=a.is_read,
-            is_dismissed=a.is_dismissed,
-            created_at=a.created_at.isoformat(),
-        )
-        for a in alerts
-    ]
+    return [_alert_to_response(a) for a in alerts]
 
 
 @router.get("/{partner_id}", response_model=PartnerResponse)
@@ -519,18 +509,7 @@ async def run_all_checks(
         # Recalculate risk after checks
         await service.calculate_risk_score(partner_id)
 
-        return [
-            PartnerCheckResponse(
-                id=str(c.id),
-                check_type=c.check_type,
-                status=c.status,
-                score=c.score,
-                result_summary=c.result_summary,
-                provider=c.provider,
-                created_at=c.created_at.isoformat(),
-            )
-            for c in checks
-        ]
+        return [_check_to_response(c) for c in checks]
     except NotFoundError:
         raise HTTPException(404, "Partner nicht gefunden")
 
@@ -544,18 +523,7 @@ async def mark_alert_read(
     """Mark an alert as read."""
     try:
         alert = await service.mark_alert_read(alert_id)
-        return PartnerAlertResponse(
-            id=str(alert.id),
-            alert_type=alert.alert_type,
-            severity=alert.severity,
-            title=alert.title,
-            description=alert.description,
-            source=alert.source,
-            source_url=alert.source_url,
-            is_read=alert.is_read,
-            is_dismissed=alert.is_dismissed,
-            created_at=alert.created_at.isoformat(),
-        )
+        return _alert_to_response(alert)
     except NotFoundError:
         raise HTTPException(404, "Alert nicht gefunden")
 
@@ -569,17 +537,6 @@ async def dismiss_alert(
     """Dismiss an alert."""
     try:
         alert = await service.dismiss_alert(alert_id)
-        return PartnerAlertResponse(
-            id=str(alert.id),
-            alert_type=alert.alert_type,
-            severity=alert.severity,
-            title=alert.title,
-            description=alert.description,
-            source=alert.source,
-            source_url=alert.source_url,
-            is_read=alert.is_read,
-            is_dismissed=alert.is_dismissed,
-            created_at=alert.created_at.isoformat(),
-        )
+        return _alert_to_response(alert)
     except NotFoundError:
         raise HTTPException(404, "Alert nicht gefunden")
