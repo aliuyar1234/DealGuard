@@ -1,0 +1,244 @@
+'use client';
+
+import { Shell } from '@/components/layout/Shell';
+import { Badge, Button, Card, CardContent } from '@/components/ui';
+import { useAuth } from '@/hooks/useAuth';
+import { usePartners } from '@/hooks/usePartners';
+import { formatDate } from '@/lib/utils';
+import {
+  AlertCircle,
+  Building2,
+  Eye,
+  Loader2,
+  Plus,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+} from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+
+const PARTNER_TYPE_LABELS: Record<string, string> = {
+  supplier: 'Lieferant',
+  customer: 'Kunde',
+  service_provider: 'Dienstleister',
+  distributor: 'Distributor',
+  partner: 'Partner',
+  other: 'Sonstige',
+};
+
+const RISK_LEVEL_LABELS: Record<string, string> = {
+  low: 'Niedrig',
+  medium: 'Mittel',
+  high: 'Hoch',
+  critical: 'Kritisch',
+  unknown: 'Unbekannt',
+};
+
+export default function PartnersPage() {
+  const router = useRouter();
+  const { token, loading: authLoading } = useAuth();
+  const { partners, loading, error, fetchPartners } = usePartners();
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (!authLoading && !token) {
+      router.push('/login');
+    }
+  }, [authLoading, token, router]);
+
+  // Fetch partners when token is available
+  useEffect(() => {
+    if (token) {
+      fetchPartners(token);
+    }
+  }, [token, fetchPartners]);
+
+  // Filter partners by search query
+  const filteredPartners = partners.filter(
+    (p) =>
+      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      p.city?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      p.handelsregister_id?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const getRiskBadgeVariant = (level: string) => {
+    switch (level) {
+      case 'low':
+        return 'success';
+      case 'medium':
+        return 'warning';
+      case 'high':
+      case 'critical':
+        return 'danger';
+      default:
+        return 'default';
+    }
+  };
+
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <Shell>
+        <div className="flex items-center justify-center min-h-[400px]">
+          <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+        </div>
+      </Shell>
+    );
+  }
+
+  return (
+    <Shell>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Partner</h1>
+            <p className="text-gray-500 mt-1">
+              Partner-Intelligence und Risikobewertung
+            </p>
+          </div>
+          <Link href="/partner/neu">
+            <Button>
+              <Plus className="w-4 h-4 mr-2" />
+              Neuer Partner
+            </Button>
+          </Link>
+        </div>
+
+        {/* Search */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Partner suchen (Name, Ort, HRB)..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+          />
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center space-x-3">
+            <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
+        )}
+
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-primary-600" />
+          </div>
+        )}
+
+        {/* Partner list */}
+        {!loading && (
+          <div className="space-y-4">
+            {filteredPartners.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <Building2 className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">
+                    {searchQuery ? 'Keine Treffer' : 'Keine Partner vorhanden'}
+                  </h3>
+                  <p className="text-gray-500 mb-4">
+                    {searchQuery
+                      ? 'Versuchen Sie einen anderen Suchbegriff.'
+                      : 'Legen Sie Ihren ersten Geschäftspartner an.'}
+                  </p>
+                  {!searchQuery && (
+                    <Link href="/partner/neu">
+                      <Button>
+                        <Plus className="w-4 h-4 mr-2" />
+                        Partner anlegen
+                      </Button>
+                    </Link>
+                  )}
+                </CardContent>
+              </Card>
+            ) : (
+              filteredPartners.map((partner) => (
+                <Link key={partner.id} href={`/partner/${partner.id}`}>
+                  <Card className="hover:border-primary-300 transition-colors cursor-pointer">
+                    <CardContent className="py-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-4">
+                          <div className="p-2 bg-gray-100 rounded-lg">
+                            <Building2 className="w-8 h-8 text-gray-600" />
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <h3 className="font-medium text-gray-900">
+                                {partner.name}
+                              </h3>
+                              {partner.is_watched && (
+                                <span title="Auf Watchlist">
+                                  <Eye className="w-4 h-4 text-primary-500" />
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center space-x-3 mt-1 text-sm text-gray-500">
+                              <span>{PARTNER_TYPE_LABELS[partner.partner_type] || partner.partner_type}</span>
+                              {partner.city && (
+                                <>
+                                  <span>•</span>
+                                  <span>{partner.city}</span>
+                                </>
+                              )}
+                              {partner.handelsregister_id && (
+                                <>
+                                  <span>•</span>
+                                  <span>{partner.handelsregister_id}</span>
+                                </>
+                              )}
+                              <span>•</span>
+                              <span>{formatDate(partner.created_at)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-3">
+                          {partner.risk_score !== null ? (
+                            <div className="text-right">
+                              <div className="flex items-center space-x-2">
+                                {partner.risk_level === 'low' ? (
+                                  <ShieldCheck className="w-5 h-5 text-green-500" />
+                                ) : (
+                                  <ShieldAlert className={`w-5 h-5 ${
+                                    partner.risk_level === 'medium' ? 'text-yellow-500' :
+                                    partner.risk_level === 'high' ? 'text-orange-500' :
+                                    partner.risk_level === 'critical' ? 'text-red-500' :
+                                    'text-gray-400'
+                                  }`} />
+                                )}
+                                <span className="text-2xl font-bold text-gray-900">
+                                  {partner.risk_score}
+                                </span>
+                              </div>
+                              <Badge
+                                variant={getRiskBadgeVariant(partner.risk_level) as any}
+                              >
+                                {RISK_LEVEL_LABELS[partner.risk_level]}
+                              </Badge>
+                            </div>
+                          ) : (
+                            <Badge variant="default">
+                              Nicht bewertet
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </Link>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    </Shell>
+  );
+}

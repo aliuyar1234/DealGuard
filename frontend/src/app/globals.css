@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base styles */
+@layer base {
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply bg-gray-50 text-gray-900;
+  }
+}
+
+/* Component utilities */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500;
+  }
+
+  .btn-secondary {
+    @apply btn bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 focus:ring-primary-500;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+  }
+
+  .input {
+    @apply block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-gray-700 mb-1;
+  }
+
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-200;
+  }
+
+  .card-header {
+    @apply px-6 py-4 border-b border-gray-200;
+  }
+
+  .card-body {
+    @apply p-6;
+  }
+}
+
+/* Risk score colors */
+@layer utilities {
+  .risk-low {
+    @apply text-green-600 bg-green-50;
+  }
+
+  .risk-medium {
+    @apply text-yellow-600 bg-yellow-50;
+  }
+
+  .risk-high {
+    @apply text-orange-600 bg-orange-50;
+  }
+
+  .risk-critical {
+    @apply text-red-600 bg-red-50;
+  }
+}

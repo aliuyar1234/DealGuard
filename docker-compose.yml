@@ -1,0 +1,147 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: dealguard-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: dealguard
+      POSTGRES_PASSWORD: dealguard
+      POSTGRES_DB: dealguard
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dealguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis (Queue & Cache)
+  redis:
+    image: redis:7-alpine
+    container_name: dealguard-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # MinIO (S3-compatible storage)
+  minio:
+    image: minio/minio
+    container_name: dealguard-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # MinIO Setup (create bucket on startup)
+  minio-setup:
+    image: minio/mc
+    container_name: dealguard-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minio minio123;
+      mc mb myminio/dealguard-documents --ignore-existing;
+      exit 0;
+      "
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: dealguard-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://dealguard:dealguard@postgres:5432/dealguard
+      - DATABASE_SYNC_URL=postgresql://dealguard:dealguard@postgres:5432/dealguard
+      - REDIS_URL=redis://redis:6379
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minio
+      - S3_SECRET_KEY=minio123
+      - S3_BUCKET=dealguard-documents
+      - APP_ENV=development
+      - APP_DEBUG=true
+      - PYTHONPATH=/app/src
+    env_file:
+      - .env
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/alembic:/app/alembic
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: uvicorn dealguard.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Background Worker
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: dealguard-worker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://dealguard:dealguard@postgres:5432/dealguard
+      - DATABASE_SYNC_URL=postgresql://dealguard:dealguard@postgres:5432/dealguard
+      - REDIS_URL=redis://redis:6379
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minio
+      - S3_SECRET_KEY=minio123
+      - S3_BUCKET=dealguard-documents
+      - PYTHONPATH=/app/src
+    env_file:
+      - .env
+    volumes:
+      - ./backend/src:/app/src
+    depends_on:
+      - postgres
+      - redis
+    command: arq dealguard.infrastructure.queue.worker.WorkerSettings
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: dealguard-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    env_file:
+      - .env
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    command: npm run dev
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

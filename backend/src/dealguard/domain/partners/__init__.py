@@ -1,0 +1,1 @@
+"""Partner intelligence domain."""
