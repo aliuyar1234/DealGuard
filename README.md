@@ -1,12 +1,34 @@
 # DealGuard
 
-KI-gestützte Vertragsanalyse und Partner-Intelligence für KMU im DACH-Raum.
+**Austrian Legal Infrastructure as a Service** - KI-gestützte Vertragsanalyse, Partner-Intelligence und Zugang zu echten österreichischen Rechtsdaten für KMU im DACH-Raum.
 
-## Features (MVP)
+## Was macht DealGuard besonders?
 
-- **Vertragsanalyse**: Upload von PDF/DOCX → KI-Analyse → Risiko-Score und Empfehlungen
-- **Deutsches Recht**: Analyse nach BGB/HGB mit Fokus auf typische Vertragsrisiken
-- **Risikokategorien**: Haftung, Zahlung, Kündigung, Gerichtsstand, IP, DSGVO, Gewährleistung
+DealGuard ist nicht nur ein Vertragsanalyse-Tool - es ist eine **vollständige Legal-Tech-Plattform** mit Zugang zu echten österreichischen Datenquellen:
+
+### 🏛️ Austrian Legal Data APIs
+- **RIS OGD**: Alle Bundesgesetze, OGH-Urteile - tagesaktuell und GRATIS
+- **Ediktsdatei**: Insolvenzen, Versteigerungen, Pfändungen - GRATIS
+- **OpenFirmenbuch**: Firmendaten, Geschäftsführer, Kapital - GRATIS
+- **OpenSanctions**: EU/UN/US Sanktionslisten, PEP-Daten - GRATIS
+
+### 📋 Features
+
+| Feature | Beschreibung |
+|---------|--------------|
+| **Vertragsanalyse** | PDF/DOCX Upload → KI-Analyse → Risiko-Score + Empfehlungen |
+| **Partner-Intelligence** | Bonitätsprüfung, Sanktions-Screening, Insolvenz-Check |
+| **AI Legal Chat** | Fragen zu eigenen Verträgen mit echten Gesetzeszitaten |
+| **Proaktives Monitoring** | Fristen-Wächter, Risk Radar, automatische Alerts |
+| **MCP Server** | 13 Tools für Claude/LLMs mit echten Rechtsdaten |
+
+### 🔍 Warum das Game-Changing ist
+
+- **ABGB-Zitate sind ECHT** (aus RIS API, nicht halluziniert)
+- **Insolvenz-Info ist ECHT** (aus Ediktsdatei)
+- **Firmendaten sind ECHT** (aus OpenFirmenbuch)
+- **Sanktionsprüfung ist ECHT** (aus OpenSanctions)
+- **ChatGPT kann das NICHT** (kein Zugang zu diesen Datenquellen)
 
 ## Tech Stack
 
@@ -16,8 +38,8 @@ KI-gestützte Vertragsanalyse und Partner-Intelligence für KMU im DACH-Raum.
 | Frontend | Next.js 14, TypeScript, Tailwind CSS |
 | Database | PostgreSQL 16 |
 | Queue | Redis + ARQ |
-| AI | Anthropic Claude API |
-| Auth | Supabase Auth |
+| AI | Anthropic Claude / DeepSeek (wählbar) |
+| Auth | Supabase Auth (Dev-Mode ohne Supabase möglich) |
 | Storage | S3-kompatibel (MinIO lokal) |
 
 ## Schnellstart
@@ -31,17 +53,19 @@ KI-gestützte Vertragsanalyse und Partner-Intelligence für KMU im DACH-Raum.
 ### 1. Repository klonen
 
 ```bash
-git clone <repo-url>
-cd dealguard
+git clone https://github.com/aliuyar1234/DealGuard.git
+cd DealGuard
 ```
 
 ### 2. Umgebungsvariablen konfigurieren
 
 ```bash
 cp .env.example .env
-# Bearbeiten und API-Keys eintragen:
-# - ANTHROPIC_API_KEY
-# - SUPABASE_* Variablen
+# Bearbeiten und konfigurieren:
+# - APP_SECRET_KEY (REQUIRED - generate with: python -c "import secrets; print(secrets.token_urlsafe(32))")
+# - AI_PROVIDER=deepseek (günstiger) oder AI_PROVIDER=anthropic
+# - DEEPSEEK_API_KEY oder ANTHROPIC_API_KEY
+# - AUTH_PROVIDER=dev (kein Supabase nötig für lokale Entwicklung)
 ```
 
 ### 3. Services starten
@@ -67,109 +91,125 @@ make migrate
 - API Docs: http://localhost:8000/docs
 - MinIO Console: http://localhost:9001 (minio/minio123)
 
-## Entwicklung
+## MCP Server - Austrian Legal Tools
 
-### Backend (lokal ohne Docker)
+DealGuard stellt 13 MCP-Tools für LLMs bereit:
 
-```bash
-cd backend
-
-# Virtual Environment erstellen
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-.venv\Scripts\activate     # Windows
-
-# Dependencies installieren
-pip install -e ".[dev]"
-
-# Server starten
-uvicorn dealguard.main:app --reload
-```
-
-### Frontend (lokal ohne Docker)
-
-```bash
-cd frontend
-
-# Dependencies installieren
-npm install
-
-# Dev Server starten
-npm run dev
-```
-
-### Nützliche Befehle
-
-```bash
-make help         # Alle Befehle anzeigen
-make logs         # Logs aller Services
-make test         # Tests ausführen
-make lint         # Linter ausführen
-make migrate      # Datenbank-Migrationen
-make db-shell     # PostgreSQL Shell
-```
-
-## Projektstruktur
-
-```
-dealguard/
-├── backend/
-│   ├── src/dealguard/
-│   │   ├── api/              # HTTP Routes
-│   │   ├── domain/           # Business Logic
-│   │   ├── infrastructure/   # External Services
-│   │   └── shared/           # Cross-cutting
-│   ├── alembic/              # DB Migrations
-│   └── tests/
-├── frontend/
-│   ├── src/
-│   │   ├── app/              # Next.js Pages
-│   │   ├── components/       # React Components
-│   │   └── lib/              # Utilities
-│   └── public/
-└── infrastructure/
-    └── docker/
-```
+| Tool | Beschreibung | Datenquelle |
+|------|-------------|-------------|
+| `dealguard_search_ris` | Suche nach österreichischen Gesetzen | RIS OGD API |
+| `dealguard_get_law_text` | Vollständiger Gesetzestext | RIS OGD API |
+| `dealguard_search_insolvency` | Insolvenz-Suche | Ediktsdatei |
+| `dealguard_search_companies` | Firmensuche Österreich | OpenFirmenbuch |
+| `dealguard_get_company_details` | Firmenbuch-Auszug | OpenFirmenbuch |
+| `dealguard_check_sanctions` | Sanktionslisten-Check | OpenSanctions |
+| `dealguard_check_pep` | PEP-Prüfung | OpenSanctions |
+| `dealguard_comprehensive_compliance` | Compliance-Gesamtprüfung | OpenSanctions |
+| `dealguard_search_contracts` | Vertragssuche | DealGuard DB |
+| `dealguard_get_contract` | Vertragsdetails | DealGuard DB |
+| `dealguard_get_partners` | Partnerliste | DealGuard DB |
+| `dealguard_get_deadlines` | Fristen-Übersicht | DealGuard DB |
 
 ## API Endpunkte
 
 ### Contracts
-
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
 | POST | `/api/v1/contracts/` | Vertrag hochladen |
 | GET | `/api/v1/contracts/` | Alle Verträge listen |
 | GET | `/api/v1/contracts/{id}` | Vertrag mit Analyse |
 | POST | `/api/v1/contracts/{id}/analyze` | Analyse starten |
-| DELETE | `/api/v1/contracts/{id}` | Vertrag löschen |
 
-### Health
-
+### Partners
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
-| GET | `/api/v1/health` | Health Check |
-| GET | `/api/v1/ready` | Readiness Check |
+| GET | `/api/v1/partners/` | Partner listen |
+| POST | `/api/v1/partners/` | Partner anlegen |
+| POST | `/api/v1/partners/{id}/checks` | Prüfungen starten |
+
+### Chat (AI Legal Assistant)
+| Methode | Pfad | Beschreibung |
+|---------|------|--------------|
+| POST | `/api/v1/chat/v2` | Chat mit echten Rechtsdaten |
+| GET | `/api/v1/chat/v2/tools` | Verfügbare Tools |
+
+### Settings
+| Methode | Pfad | Beschreibung |
+|---------|------|--------------|
+| GET | `/api/v1/settings` | Einstellungen laden |
+| PUT | `/api/v1/settings/api-keys` | API Keys speichern |
+
+## Entwicklung
+
+### Backend Tests
+
+```bash
+cd backend
+python -m pytest tests/ -v
+# 147 Tests
+```
+
+### Frontend Tests
+
+```bash
+cd frontend
+npm test
+```
+
+## Projektstruktur
+
+```
+DealGuard/
+├── backend/
+│   ├── src/dealguard/
+│   │   ├── api/              # HTTP Routes + Rate Limiting
+│   │   ├── domain/           # Business Logic
+│   │   │   ├── chat/         # AI Chat Service
+│   │   │   ├── contracts/    # Vertragsanalyse
+│   │   │   ├── legal/        # Legal Chat
+│   │   │   ├── partners/     # Partner Intelligence
+│   │   │   └── proactive/    # Alerts & Deadlines
+│   │   ├── infrastructure/   # External Services
+│   │   │   ├── ai/           # Anthropic/DeepSeek Clients
+│   │   │   ├── auth/         # Supabase/Dev Auth
+│   │   │   ├── database/     # SQLAlchemy Models
+│   │   │   └── external/     # OpenFirmenbuch, OpenSanctions
+│   │   ├── mcp/              # MCP Server + Tools
+│   │   └── shared/           # Crypto, Logging
+│   ├── alembic/              # DB Migrations
+│   └── tests/                # 147 Tests
+├── frontend/
+│   ├── src/
+│   │   ├── app/              # Next.js Pages
+│   │   ├── components/       # React Components
+│   │   └── hooks/            # Custom Hooks
+│   └── e2e/                  # Playwright Tests
+├── docs/                     # Architecture Docs
+└── docker-compose.yml
+```
 
 ## Architektur
 
-### Backend Layers
+### Security
+- **Encryption at Rest**: Vertragstext und API Keys mit Fernet verschlüsselt
+- **Rate Limiting**: slowapi mit Redis Backend
+- **Tenant Isolation**: Alle Queries per `organization_id` gefiltert
 
-```
-API Layer (FastAPI)
-    ↓
-Domain Layer (Pure Python - Business Logic)
-    ↓
-Infrastructure Layer (DB, AI, Storage)
-```
+### Multi-Provider AI
+- **Anthropic Claude**: Production (Claude Sonnet)
+- **DeepSeek**: Development (~20x günstiger)
+- Konfigurierbar per User-Settings
 
-### Multi-Tenant
+## Kosten
 
-Alle Daten sind per `organization_id` isoliert. Das Repository-Pattern stellt sicher, dass Queries automatisch gefiltert werden.
+| Operation | DeepSeek | Anthropic |
+|-----------|----------|-----------|
+| Vertragsanalyse | ~€0.05 | ~€1.00 |
+| Chat-Nachricht | ~€0.001 | ~€0.02 |
+| Compliance-Check | GRATIS | GRATIS |
 
-### Auth Abstraktion
-
-Der `AuthProvider` ist abstrakt implementiert, sodass ein späterer Wechsel von Supabase zu Clerk nur eine neue Provider-Implementierung erfordert.
+Die österreichischen Datenquellen (RIS, Ediktsdatei, OpenFirmenbuch, OpenSanctions) sind **kostenlos**.
 
 ## Lizenz
 
-Proprietary - All rights reserved
+MIT License - Open Source
