@@ -133,7 +133,7 @@ DealGuard ist mehr als ein Vertragsanalyse-Tool - es ist eine **vollständige Le
 |---------|-------------|---------|
 | Backend | Python 3.12, FastAPI | Async, SQLAlchemy 2.0, Pydantic v2 |
 | Frontend | Next.js 14, TypeScript | App Router, Tailwind CSS |
-| Database | PostgreSQL 16 | Multi-Tenant via organization_id |
+| Database | PostgreSQL 16 | Single-Tenant (Self-Hosted) |
 | Queue | Redis + ARQ | Background Jobs |
 | AI | Anthropic Claude / DeepSeek | Wählbar pro User |
 | Auth | Supabase Auth | Dev-Mode ohne Supabase möglich |
@@ -150,10 +150,10 @@ DealGuard ist mehr als ein Vertragsanalyse-Tool - es ist eine **vollständige Le
 - ✅ **Encryption at Rest**: Vertragstext und API Keys mit Fernet verschlüsselt
 - ✅ **APP_SECRET_KEY Required**: Kein unsicherer Default möglich
 - ✅ **Rate Limiting**: slowapi mit konfigurierbaren Limits
-- ✅ **Tenant Isolation**: Alle Queries per `organization_id` gefiltert
 - ✅ **Soft Deletes**: `deleted_at IS NULL` automatisch gefiltert
 - ✅ **CORS Konfiguration**: Nur erlaubte Origins
 - ✅ **Input Validation**: Pydantic v2 mit Constraints
+- ✅ **Self-Hosted**: Single-Tenant Mode für isolierte Deployments
 
 ### Rate Limits
 

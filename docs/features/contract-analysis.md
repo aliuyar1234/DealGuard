@@ -81,7 +81,6 @@ Upload eines Vertrags (PDF/DOCX) → KI-Analyse nach österreichischem Recht →
 ## Security
 
 - **Encryption at Rest**: Vertragstext wird mit Fernet verschlüsselt
-- **Tenant Isolation**: Alle Queries per `organization_id` gefiltert
 - **Soft Deletes**: Gelöschte Verträge werden nicht wirklich gelöscht
 - **Rate Limiting**: 10 Uploads/Minute
 

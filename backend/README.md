@@ -176,7 +176,6 @@ backend/
 - **Encryption at Rest**: Contract text and API keys encrypted with Fernet
 - **APP_SECRET_KEY Required**: No insecure defaults
 - **Rate Limiting**: slowapi with configurable limits
-- **Tenant Isolation**: All queries filtered by `organization_id`
 - **Soft Deletes**: `deleted_at IS NULL` automatically filtered
 - **CORS Configuration**: Only allowed origins
 - **Input Validation**: Pydantic v2 with constraints
