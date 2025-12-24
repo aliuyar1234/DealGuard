@@ -145,7 +145,7 @@ class PartnerCheckService:
                 partner_id=str(partner_id),
                 error=str(e),
             )
-            raise
+            return check
 
     async def run_credit_check(
         self,
@@ -211,7 +211,7 @@ class PartnerCheckService:
                 partner_id=str(partner_id),
                 error=str(e),
             )
-            raise
+            return check
 
     async def run_sanction_check(
         self,
@@ -264,7 +264,7 @@ class PartnerCheckService:
                 partner_id=str(partner_id),
                 error=str(e),
             )
-            raise
+            return check
 
     async def run_insolvency_check(
         self,
@@ -317,7 +317,7 @@ class PartnerCheckService:
                 partner_id=str(partner_id),
                 error=str(e),
             )
-            raise
+            return check
 
     async def run_all_checks(
         self,
@@ -327,32 +327,20 @@ class PartnerCheckService:
         checks = []
 
         if self.company_provider:
-            try:
-                check = await self.run_handelsregister_check(partner_id)
-                checks.append(check)
-            except Exception:
-                pass  # Log already done
+            check = await self.run_handelsregister_check(partner_id)
+            checks.append(check)
 
         if self.credit_provider:
-            try:
-                check = await self.run_credit_check(partner_id)
-                checks.append(check)
-            except Exception:
-                pass
+            check = await self.run_credit_check(partner_id)
+            checks.append(check)
 
         if self.sanction_provider:
-            try:
-                check = await self.run_sanction_check(partner_id)
-                checks.append(check)
-            except Exception:
-                pass
+            check = await self.run_sanction_check(partner_id)
+            checks.append(check)
 
         if self.insolvency_provider:
-            try:
-                check = await self.run_insolvency_check(partner_id)
-                checks.append(check)
-            except Exception:
-                pass
+            check = await self.run_insolvency_check(partner_id)
+            checks.append(check)
 
         logger.info(
             "all_checks_completed",

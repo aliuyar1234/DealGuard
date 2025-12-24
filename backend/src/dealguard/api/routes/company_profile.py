@@ -57,9 +57,12 @@ class UpdateCompanyProfileRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────
 
 
-async def get_profile_service(session: SessionDep) -> CompanyProfileService:
+async def get_profile_service(
+    session: SessionDep,
+    user: CurrentUser,
+) -> CompanyProfileService:
     """Get company profile service."""
-    return CompanyProfileService(session)
+    return CompanyProfileService(session, organization_id=user.organization_id)
 
 
 ProfileServiceDep = Annotated[CompanyProfileService, Depends(get_profile_service)]

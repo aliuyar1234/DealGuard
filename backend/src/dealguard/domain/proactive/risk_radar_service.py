@@ -28,7 +28,6 @@ from dealguard.infrastructure.database.models.proactive import (
     AlertSeverity,
     ComplianceStatus,
 )
-from dealguard.shared.context import get_tenant_context
 from dealguard.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -82,11 +81,12 @@ class RiskRadarService:
         "deadlines": 0.20,
     }
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, organization_id: UUID) -> None:
         self.session = session
+        self.organization_id = organization_id
 
     def _get_organization_id(self) -> UUID:
-        return get_tenant_context().organization_id
+        return self.organization_id
 
     # ─────────────────────────────────────────────────────────────
     #                  RISK RADAR (REAL-TIME)
@@ -134,7 +134,7 @@ class RiskRadarService:
         query = (
             select(Contract)
             .where(Contract.organization_id == org_id)
-            .options(selectinload(Contract.analyses))
+            .options(selectinload(Contract.analysis))
         )
         result = await self.session.execute(query)
         contracts = result.scalars().all()
@@ -156,12 +156,12 @@ class RiskRadarService:
         key_issues = []
 
         for contract in contracts:
-            # Get latest analysis risk score
-            if contract.analyses:
-                latest = max(contract.analyses, key=lambda a: a.created_at)
-                if latest.risk_score and latest.risk_score >= 70:
-                    high_risk += 1
-                    key_issues.append(f"{contract.filename}: Risiko-Score {latest.risk_score}")
+            analysis = contract.analysis
+            if analysis and analysis.risk_score and analysis.risk_score >= 70:
+                high_risk += 1
+                key_issues.append(
+                    f"{contract.filename}: Risiko-Score {analysis.risk_score}"
+                )
 
         # Score = percentage of high-risk contracts
         score = int((high_risk / total) * 100) if total > 0 else 0

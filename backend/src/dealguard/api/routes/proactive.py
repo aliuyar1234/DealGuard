@@ -25,7 +25,7 @@ from dealguard.infrastructure.database.models.proactive import (
     DeadlineType,
 )
 from dealguard.domain.proactive import (
-    DeadlineService,
+    DeadlineMonitoringService,
     AlertService,
     AlertFilter,
     RiskRadarService,
@@ -221,7 +221,11 @@ async def list_deadlines(
     current_user: User = Depends(get_current_user),
 ):
     """List upcoming deadlines."""
-    service = DeadlineService(db)
+    service = DeadlineMonitoringService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
 
     if contract_id:
         deadlines = await service.get_deadlines_for_contract(contract_id)
@@ -239,7 +243,11 @@ async def get_deadline_stats(
     current_user: User = Depends(get_current_user),
 ):
     """Get deadline statistics."""
-    service = DeadlineService(db)
+    service = DeadlineMonitoringService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     stats = await service.get_deadline_stats()
     return DeadlineStatsResponse(
         total=stats.total,
@@ -258,7 +266,11 @@ async def mark_deadline_handled(
     current_user: User = Depends(get_current_user),
 ):
     """Mark a deadline as handled."""
-    service = DeadlineService(db)
+    service = DeadlineMonitoringService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     deadline = await service.mark_deadline_handled(
         deadline_id=deadline_id,
         action=request.action,
@@ -280,7 +292,11 @@ async def dismiss_deadline(
     current_user: User = Depends(get_current_user),
 ):
     """Dismiss a deadline (mark as not relevant)."""
-    service = DeadlineService(db)
+    service = DeadlineMonitoringService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     deadline = await service.dismiss_deadline(
         deadline_id=deadline_id,
         notes=request.notes,
@@ -301,7 +317,11 @@ async def verify_deadline(
     current_user: User = Depends(get_current_user),
 ):
     """Verify an AI-extracted deadline (human confirmation)."""
-    service = DeadlineService(db)
+    service = DeadlineMonitoringService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     deadline = await service.verify_deadline(
         deadline_id=deadline_id,
         correct_date=request.correct_date,
@@ -332,7 +352,11 @@ async def list_alerts(
     current_user: User = Depends(get_current_user),
 ):
     """List proactive alerts with filtering."""
-    service = AlertService(db)
+    service = AlertService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
 
     # Build filter
     filter_obj = AlertFilter(
@@ -353,7 +377,11 @@ async def get_alert_stats(
     current_user: User = Depends(get_current_user),
 ):
     """Get alert statistics."""
-    service = AlertService(db)
+    service = AlertService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     stats = await service.get_stats()
     return AlertStatsResponse(
         total=stats.total,
@@ -372,7 +400,11 @@ async def get_new_alert_count(
     current_user: User = Depends(get_current_user),
 ):
     """Get count of new alerts (for badge display)."""
-    service = AlertService(db)
+    service = AlertService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     count = await service.count_new_alerts()
     return {"count": count}
 
@@ -384,7 +416,11 @@ async def get_alert(
     current_user: User = Depends(get_current_user),
 ):
     """Get a single alert by ID."""
-    service = AlertService(db)
+    service = AlertService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     alert = await service.get_alert(alert_id)
 
     if not alert:
@@ -404,7 +440,11 @@ async def resolve_alert(
     current_user: User = Depends(get_current_user),
 ):
     """Resolve an alert (action taken)."""
-    service = AlertService(db)
+    service = AlertService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     alert = await service.resolve(
         alert_id=alert_id,
         action=request.action,
@@ -426,7 +466,11 @@ async def dismiss_alert(
     current_user: User = Depends(get_current_user),
 ):
     """Dismiss an alert (not relevant)."""
-    service = AlertService(db)
+    service = AlertService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     alert = await service.dismiss(
         alert_id=alert_id,
         notes=request.notes,
@@ -447,7 +491,11 @@ async def snooze_alert(
     current_user: User = Depends(get_current_user),
 ):
     """Snooze an alert for a specified number of days."""
-    service = AlertService(db)
+    service = AlertService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     alert = await service.snooze(
         alert_id=alert_id,
         days=request.days,
@@ -466,7 +514,11 @@ async def mark_all_alerts_seen(
     current_user: User = Depends(get_current_user),
 ):
     """Mark all new alerts as seen."""
-    service = AlertService(db)
+    service = AlertService(
+        db,
+        organization_id=current_user.organization_id,
+        user_id=current_user.id,
+    )
     count = await service.mark_all_seen()
     await db.commit()
     return {"marked_seen": count}
@@ -483,7 +535,7 @@ async def get_risk_radar(
     current_user: User = Depends(get_current_user),
 ):
     """Get current risk radar overview."""
-    service = RiskRadarService(db)
+    service = RiskRadarService(db, organization_id=current_user.organization_id)
     radar = await service.get_risk_radar()
 
     return RiskRadarResponse(
@@ -514,7 +566,7 @@ async def get_risk_history(
     current_user: User = Depends(get_current_user),
 ):
     """Get risk history for trending chart."""
-    service = RiskRadarService(db)
+    service = RiskRadarService(db, organization_id=current_user.organization_id)
     snapshots = await service.get_risk_history(days=days)
 
     return [

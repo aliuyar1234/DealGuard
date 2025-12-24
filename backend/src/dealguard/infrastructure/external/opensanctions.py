@@ -229,6 +229,12 @@ class OpenSanctionsProvider(SanctionProvider):
 
             return filtered
 
+        except httpx.HTTPStatusError as e:
+            logger.error(f"OpenSanctions search error: {e}")
+            raise
+        except httpx.RequestError as e:
+            logger.error(f"OpenSanctions request error: {e}")
+            raise
         except Exception as e:
             logger.error(f"OpenSanctions search error: {e}")
             return []
@@ -340,13 +346,16 @@ class PEPScreeningProvider:
                 m.get("score", 0) >= 0.8 for m in pep_matches
             )
 
+            summary = (
+                f"PEP-Status: {'Ja' if is_pep else 'Nein'}. "
+                f"{len(pep_matches)} mögliche Treffer."
+            ) if pep_matches else "PEP-Status: Nein. Keine PEP-Treffer gefunden."
+
             return {
                 "is_pep": is_pep,
                 "matches": pep_matches if pep_matches else None,
                 "score": max((m.get("score", 0) for m in pep_matches), default=0) if pep_matches else 0,
-                "summary": f"PEP-Status: {'Ja' if is_pep else 'Nein'}. "
-                           f"{len(pep_matches)} mögliche Treffer."
-                           if pep_matches else "Keine PEP-Treffer gefunden.",
+                "summary": summary,
                 "checked_at": datetime.now().isoformat(),
             }
 

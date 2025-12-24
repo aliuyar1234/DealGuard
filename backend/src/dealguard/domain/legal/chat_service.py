@@ -36,7 +36,6 @@ from dealguard.infrastructure.database.models.legal_chat import (
     LegalMessage,
     MessageRole,
 )
-from dealguard.shared.context import get_tenant_context
 from dealguard.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -71,18 +70,26 @@ class LegalChatService:
     6. Store message and return response
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+    ) -> None:
         self.session = session
-        self.knowledge_retriever = KnowledgeRetriever(session)
-        self.profile_service = CompanyProfileService(session)
+        self.organization_id = organization_id
+        self.user_id = user_id
+        self.knowledge_retriever = KnowledgeRetriever(session, organization_id=organization_id)
+        self.profile_service = CompanyProfileService(session, organization_id=organization_id)
         self.ai_client = get_ai_client()
         self.prompt = LegalAdvisorPromptV1()
 
     def _get_organization_id(self) -> UUID:
-        return get_tenant_context().organization_id
+        return self.organization_id
 
     def _get_user_id(self) -> UUID:
-        return get_tenant_context().user_id
+        return self.user_id
 
     # ─────────────────────────────────────────────────────────────
     #                    CONVERSATION CRUD
@@ -396,7 +403,7 @@ class LegalChatService:
             conversation_id=conversation_id,
             role=role,
             content=content,
-            metadata=metadata or {},
+            message_metadata=metadata or {},
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_cents=cost_cents,

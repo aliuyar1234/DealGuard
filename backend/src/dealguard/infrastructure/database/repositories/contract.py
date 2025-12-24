@@ -1,9 +1,10 @@
 """Contract repository."""
 
+from datetime import datetime
 from typing import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from dealguard.infrastructure.database.models.contract import (
@@ -12,6 +13,7 @@ from dealguard.infrastructure.database.models.contract import (
     ContractAnalysis,
     ContractFinding,
 )
+from dealguard.infrastructure.database.models.organization import Organization
 from dealguard.infrastructure.database.repositories.base import BaseRepository
 
 
@@ -67,6 +69,23 @@ class ContractRepository(BaseRepository[Contract]):
         result = await self.session.execute(query)
         return result.scalars().all()
 
+    async def count_created_between(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        include_deleted: bool = False,
+    ) -> int:
+        """Count contracts created between two timestamps for the current tenant."""
+        query = self._base_query(include_deleted=include_deleted).where(
+            Contract.created_at >= start,
+            Contract.created_at < end,
+        )
+        result = await self.session.execute(
+            select(func.count()).select_from(query.subquery())
+        )
+        return result.scalar_one()
+
     async def update_status(
         self,
         contract: Contract,
@@ -77,6 +96,13 @@ class ContractRepository(BaseRepository[Contract]):
         contract.status = status
         contract.error_message = error_message
         return await self.update(contract)
+
+    async def get_contract_limit(self, organization_id: UUID) -> int | None:
+        """Fetch contract limit for an organization."""
+        organization = await self.session.get(Organization, organization_id)
+        if not organization:
+            return None
+        return organization.contract_limit
 
 
 class ContractAnalysisRepository(BaseRepository[ContractAnalysis]):
@@ -117,3 +143,4 @@ class ContractAnalysisRepository(BaseRepository[ContractAnalysis]):
         await self.session.flush()
         await self.session.refresh(analysis)
         return analysis
+

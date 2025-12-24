@@ -33,8 +33,8 @@ class TestChatServiceInitialization:
             )
 
             assert service.ai_provider == "anthropic"
-            assert service.anthropic_client is not None
-            assert service.openai_client is None
+            from dealguard.domain.chat.anthropic_handler import AnthropicHandler
+            assert isinstance(service.handler, AnthropicHandler)
 
     def test_init_deepseek_provider(self):
         """Test initialization with DeepSeek provider."""
@@ -55,8 +55,8 @@ class TestChatServiceInitialization:
             )
 
             assert service.ai_provider == "deepseek"
-            assert service.openai_client is not None
-            assert service.anthropic_client is None
+            from dealguard.domain.chat.deepseek_handler import DeepSeekHandler
+            assert isinstance(service.handler, DeepSeekHandler)
 
     def test_init_missing_anthropic_key_raises(self):
         """Test that missing Anthropic key raises ValueError."""
@@ -133,7 +133,7 @@ class TestToolConversion:
                 from dealguard.domain.chat.service_v2 import ChatService
 
                 service = ChatService(organization_id=uuid4())
-                tools = service.tools
+                tools = service.handler.tools
 
                 assert len(tools) == 1
                 assert tools[0]["name"] == "dealguard_search_ris"
@@ -162,7 +162,7 @@ class TestToolConversion:
                 from dealguard.domain.chat.service_v2 import ChatService
 
                 service = ChatService(organization_id=uuid4())
-                tools = service.openai_tools
+                tools = service.handler.tools
 
                 assert len(tools) == 1
                 assert tools[0]["type"] == "function"

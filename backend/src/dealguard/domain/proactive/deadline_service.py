@@ -1,10 +1,10 @@
-"""Deadline extraction and monitoring service.
+"""Deadline extraction and monitoring services.
 
-This service:
-1. Extracts deadlines from contracts using AI
-2. Stores them in the database
-3. Monitors for upcoming deadlines
-4. Generates alerts for approaching deadlines
+These services:
+1. Extract deadlines from contracts using AI
+2. Store them in the database
+3. Monitor for upcoming deadlines
+4. Generate alerts for approaching deadlines
 """
 
 from dataclasses import dataclass
@@ -16,11 +16,10 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from dealguard.infrastructure.ai.factory import get_ai_client
+from dealguard.infrastructure.ai.factory import AIClient
 from dealguard.infrastructure.ai.prompts.deadline_extraction_v1 import (
     DeadlineExtractionPromptV1,
     DeadlineExtractionResult,
-    ExtractedDeadline,
 )
 from dealguard.infrastructure.database.models.contract import Contract
 from dealguard.infrastructure.database.models.proactive import (
@@ -33,7 +32,6 @@ from dealguard.infrastructure.database.models.proactive import (
     AlertSeverity,
     AlertStatus,
 )
-from dealguard.shared.context import get_tenant_context
 from dealguard.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -50,25 +48,43 @@ class DeadlineStats:
     upcoming_30_days: int
 
 
-class DeadlineService:
-    """Service for extracting and monitoring contract deadlines.
 
-    Flow:
-    1. After contract analysis, extract deadlines using AI
-    2. Store deadlines in database
-    3. Background worker checks daily for approaching deadlines
-    4. Generate alerts for deadlines needing attention
-    """
-
-    def __init__(self, session: AsyncSession) -> None:
+class _DeadlineBaseService:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        organization_id: UUID,
+        user_id: UUID | None = None,
+    ) -> None:
         self.session = session
-        self.ai_client = get_ai_client()
-        self.prompt = DeadlineExtractionPromptV1()
+        self.organization_id = organization_id
+        self.user_id = user_id
 
     def _get_organization_id(self) -> UUID:
-        return get_tenant_context().organization_id
+        return self.organization_id
 
-    # ─────────────────────────────────────────────────────────────
+    def _get_user_id(self) -> UUID:
+        if self.user_id is None:
+            raise RuntimeError("user_id is required for this operation")
+        return self.user_id
+
+
+class DeadlineExtractionService(_DeadlineBaseService):
+    """Service for extracting contract deadlines using AI."""
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        ai_client: AIClient,
+        prompt: DeadlineExtractionPromptV1,
+        *,
+        organization_id: UUID,
+    ) -> None:
+        super().__init__(session, organization_id=organization_id)
+        self.ai_client = ai_client
+        self.prompt = prompt
+
     #                  DEADLINE EXTRACTION
     # ─────────────────────────────────────────────────────────────
 
@@ -212,7 +228,9 @@ class DeadlineService:
         }
         return mapping.get(type_str.lower(), DeadlineType.OTHER)
 
-    # ─────────────────────────────────────────────────────────────
+
+class DeadlineMonitoringService(_DeadlineBaseService):
+    """Service for querying deadlines and generating alerts."""
     #                  DEADLINE MONITORING
     # ─────────────────────────────────────────────────────────────
 
@@ -323,7 +341,7 @@ class DeadlineService:
     ) -> ContractDeadline | None:
         """Mark a deadline as handled."""
         org_id = self._get_organization_id()
-        user_id = get_tenant_context().user_id
+        user_id = self._get_user_id()
 
         query = (
             select(ContractDeadline)
@@ -358,11 +376,34 @@ class DeadlineService:
         notes: str | None = None,
     ) -> ContractDeadline | None:
         """Dismiss a deadline (mark as not relevant)."""
-        return await self.mark_deadline_handled(
-            deadline_id=deadline_id,
-            action="dismissed",
-            notes=notes,
+        org_id = self._get_organization_id()
+        user_id = self._get_user_id()
+
+        query = (
+            select(ContractDeadline)
+            .where(ContractDeadline.id == deadline_id)
+            .where(ContractDeadline.organization_id == org_id)
         )
+        result = await self.session.execute(query)
+        deadline = result.scalar_one_or_none()
+
+        if not deadline:
+            return None
+
+        deadline.status = DeadlineStatus.DISMISSED
+        deadline.handled_at = datetime.now(timezone.utc)
+        deadline.handled_by = user_id
+        deadline.handled_action = "dismissed"
+        deadline.notes = notes
+
+        await self.session.flush()
+
+        logger.info(
+            "deadline_dismissed",
+            deadline_id=str(deadline_id),
+        )
+
+        return deadline
 
     async def verify_deadline(
         self,

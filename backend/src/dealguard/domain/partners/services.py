@@ -22,7 +22,6 @@ from dealguard.infrastructure.database.repositories.partner import (
     ContractPartnerRepository,
 )
 from dealguard.domain.partners.risk_calculator import PartnerRiskCalculator
-from dealguard.shared.context import get_tenant_context
 from dealguard.shared.exceptions import NotFoundError, ValidationError
 from dealguard.shared.logging import get_logger
 
@@ -56,6 +55,7 @@ class PartnerService:
         name: str,
         partner_type: PartnerType = PartnerType.OTHER,
         *,
+        created_by: UUID,
         handelsregister_id: str | None = None,
         tax_id: str | None = None,
         vat_id: str | None = None,
@@ -69,8 +69,6 @@ class PartnerService:
         notes: str | None = None,
     ) -> Partner:
         """Create a new partner."""
-        ctx = get_tenant_context()
-
         # Check for duplicate by Handelsregister ID
         if handelsregister_id:
             existing = await self.partner_repo.get_by_handelsregister_id(handelsregister_id)
@@ -83,7 +81,7 @@ class PartnerService:
                 return existing
 
         partner = Partner(
-            created_by=ctx.user_id,
+            created_by=created_by,
             name=name,
             partner_type=partner_type,
             handelsregister_id=handelsregister_id,
@@ -326,14 +324,13 @@ class PartnerService:
 
         return await self.alert_repo.mark_as_read(alert)
 
-    async def dismiss_alert(self, alert_id: UUID) -> PartnerAlert:
+    async def dismiss_alert(self, alert_id: UUID, *, dismissed_by: UUID) -> PartnerAlert:
         """Dismiss an alert."""
-        ctx = get_tenant_context()
         alert = await self.alert_repo.get_by_id(alert_id)
         if not alert:
             raise NotFoundError("Alert", str(alert_id))
 
-        return await self.alert_repo.dismiss(alert, ctx.user_id)
+        return await self.alert_repo.dismiss(alert, dismissed_by)
 
     async def create_alert(
         self,

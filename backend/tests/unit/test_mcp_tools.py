@@ -4,10 +4,13 @@ Unit tests for MCP (Model Context Protocol) tools.
 Tests cover all 13 tools that Claude uses to access Austrian legal data
 and DealGuard's internal database.
 """
+import json
 import uuid
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from dealguard.mcp import models
 
@@ -52,15 +55,15 @@ class TestGetLawTextInput:
         """Test valid document number."""
         input_model = models.GetLawTextInput(document_number="NOR40000001")
         assert input_model.document_number == "NOR40000001"
-        assert input_model.include_references is False
+        assert input_model.response_format == models.ResponseFormat.MARKDOWN
 
-    def test_with_references(self):
-        """Test with references enabled."""
+    def test_with_response_format(self):
+        """Test with response format override."""
         input_model = models.GetLawTextInput(
             document_number="NOR40000001",
-            include_references=True,
+            response_format="json",
         )
-        assert input_model.include_references is True
+        assert input_model.response_format == models.ResponseFormat.JSON
 
 
 class TestSearchEdiktsdateiInput:
@@ -68,18 +71,17 @@ class TestSearchEdiktsdateiInput:
 
     def test_valid_input(self):
         """Test valid input."""
-        input_model = models.SearchEdiktsdateiInput(query="ACME GmbH")
-        assert input_model.query == "ACME GmbH"
-        assert input_model.search_type == "company"
+        input_model = models.SearchEdiktsdateiInput(name="ACME GmbH")
+        assert input_model.name == "ACME GmbH"
+        assert input_model.bundesland is None
 
-    def test_search_types(self):
-        """Test different search types."""
-        for search_type in ["company", "person", "location"]:
-            input_model = models.SearchEdiktsdateiInput(
-                query="test",
-                search_type=search_type,
-            )
-            assert input_model.search_type == search_type
+    def test_bundesland_filter(self):
+        """Test bundesland filter parsing."""
+        input_model = models.SearchEdiktsdateiInput(
+            name="test",
+            bundesland="W",
+        )
+        assert input_model.bundesland == models.Bundesland.WIEN
 
 
 class TestSearchFirmenbuchInput:
@@ -89,7 +91,7 @@ class TestSearchFirmenbuchInput:
         """Test valid input."""
         input_model = models.SearchFirmenbuchInput(query="ACME")
         assert input_model.query == "ACME"
-        assert input_model.limit == 10
+        assert input_model.limit == 5
 
     def test_custom_limit(self):
         """Test custom limit."""
@@ -102,8 +104,8 @@ class TestGetFirmenbuchAuszugInput:
 
     def test_valid_company_number(self):
         """Test valid company number."""
-        input_model = models.GetFirmenbuchAuszugInput(company_number="FN123456a")
-        assert input_model.company_number == "FN123456a"
+        input_model = models.GetFirmenbuchAuszugInput(firmenbuchnummer="FN123456a")
+        assert input_model.firmenbuchnummer == "123456a"
 
 
 class TestCheckCompanyAustriaInput:
@@ -122,7 +124,7 @@ class TestCheckSanctionsInput:
         """Test valid input with name only."""
         input_model = models.CheckSanctionsInput(name="John Doe")
         assert input_model.name == "John Doe"
-        assert input_model.country is None
+        assert input_model.country == "AT"
 
     def test_with_country(self):
         """Test input with country."""
@@ -135,13 +137,13 @@ class TestCheckPEPInput:
 
     def test_valid_input(self):
         """Test valid input."""
-        input_model = models.CheckPEPInput(name="Max Mustermann")
-        assert input_model.name == "Max Mustermann"
+        input_model = models.CheckPEPInput(person_name="Max Mustermann")
+        assert input_model.person_name == "Max Mustermann"
 
-    def test_with_birth_year(self):
-        """Test input with birth year."""
-        input_model = models.CheckPEPInput(name="Max Mustermann", birth_year=1970)
-        assert input_model.birth_year == 1970
+    def test_with_country(self):
+        """Test input with country override."""
+        input_model = models.CheckPEPInput(person_name="Max Mustermann", country="DE")
+        assert input_model.country == "DE"
 
 
 class TestComprehensiveComplianceInput:
@@ -151,16 +153,17 @@ class TestComprehensiveComplianceInput:
         """Test valid input."""
         input_model = models.ComprehensiveComplianceInput(name="Company XYZ")
         assert input_model.name == "Company XYZ"
+        assert input_model.entity_type == models.EntityType.COMPANY
 
     def test_with_all_fields(self):
         """Test with all optional fields."""
         input_model = models.ComprehensiveComplianceInput(
-            name="Company XYZ",
+            name="Max Mustermann",
             country="DE",
-            include_pep=True,
+            entity_type="person",
         )
         assert input_model.country == "DE"
-        assert input_model.include_pep is True
+        assert input_model.entity_type == models.EntityType.PERSON
 
 
 class TestSearchContractsInput:
@@ -172,10 +175,10 @@ class TestSearchContractsInput:
         assert input_model.query == "Mietvertrag"
         assert input_model.limit == 10
 
-    def test_empty_query_allowed(self):
-        """Test empty query is allowed for listing."""
-        input_model = models.SearchContractsInput()
-        assert input_model.query is None
+    def test_missing_query_raises(self):
+        """Test missing query raises validation error."""
+        with pytest.raises(ValidationError):
+            models.SearchContractsInput()
 
 
 class TestGetContractInput:
@@ -318,23 +321,38 @@ class TestEdiktsdateiTools:
     """Tests for Ediktsdatei (insolvency) tools."""
 
     @pytest.mark.asyncio
-    @patch("dealguard.mcp.tools.edikte_tools.get_ediktsdatei_client")
+    @patch("dealguard.mcp.tools.edikte_tools.get_edikte_client")
     async def test_search_insolvency_formats_results(self, mock_client):
         """Test insolvency search formatting."""
         from dealguard.mcp.tools.edikte_tools import search_ediktsdatei
+        from dealguard.mcp.ediktsdatei_client import EdikteSearchResult, InsolvenzEdikt
 
         mock_instance = AsyncMock()
-        mock_instance.search.return_value = [
-            {
-                "type": "insolvency",
-                "debtor_name": "ACME GmbH",
-                "court": "LG Wien",
-                "file_number": "123S456/23",
-            }
-        ]
+        mock_instance.search_insolvenzen.return_value = EdikteSearchResult(
+            total=1,
+            page=1,
+            page_size=10,
+            items=[
+                InsolvenzEdikt(
+                    id="1",
+                    aktenzeichen="123S456/23",
+                    gericht="LG Wien",
+                    gericht_code="LGW",
+                    schuldner_name="ACME GmbH",
+                    schuldner_adresse="Wien",
+                    verfahrensart="Konkurs",
+                    status="offen",
+                    eroeffnungsdatum=date(2024, 1, 1),
+                    kundmachungsdatum=date(2024, 1, 2),
+                    frist_forderungsanmeldung=None,
+                    insolvenzverwalter=None,
+                    details_url="https://example.com",
+                )
+            ],
+        )
         mock_client.return_value = mock_instance
 
-        result = await search_ediktsdatei("ACME", "company", 10)
+        result = await search_ediktsdatei("ACME")
 
         assert "ACME GmbH" in result
         assert "LG Wien" in result
@@ -344,122 +362,137 @@ class TestFirmenbuchTools:
     """Tests for Firmenbuch (company registry) tools."""
 
     @pytest.mark.asyncio
-    @patch("dealguard.mcp.tools.firmenbuch_tools.get_firmenbuch_client")
-    async def test_search_companies_formats_results(self, mock_client):
+    @patch("dealguard.mcp.tools.firmenbuch_tools.OpenFirmenbuchProvider")
+    async def test_search_companies_formats_results(self, mock_provider_cls):
         """Test company search formatting."""
         from dealguard.mcp.tools.firmenbuch_tools import search_firmenbuch
 
-        mock_instance = AsyncMock()
-        mock_instance.search.return_value = [
-            {
-                "company_name": "ACME GmbH",
-                "company_number": "FN123456a",
-                "legal_form": "GmbH",
-                "registered_address": "Wien",
-            }
-        ]
-        mock_client.return_value = mock_instance
+        mock_provider = AsyncMock()
+        company = MagicMock()
+        company.handelsregister_id = "FN123456a"
+        company.name = "ACME GmbH"
+        company.legal_form = "GmbH"
+        company.city = "Wien"
+        company.status = "active"
+        mock_provider.search_companies.return_value = [company]
+        mock_provider.close = AsyncMock()
+        mock_provider_cls.return_value = mock_provider
 
         result = await search_firmenbuch("ACME", 10)
+        data = json.loads(result)
 
-        assert "ACME GmbH" in result
-        assert "FN123456a" in result
+        assert data["status"] == "ok"
+        assert data["companies"][0]["name"] == "ACME GmbH"
+        assert data["companies"][0]["firmenbuchnummer"] == "FN123456a"
 
 
 class TestSanctionsTools:
     """Tests for sanctions/compliance tools."""
 
     @pytest.mark.asyncio
-    @patch("dealguard.mcp.tools.sanctions_tools.get_sanctions_client")
-    async def test_check_sanctions_no_hits(self, mock_client):
+    @patch("dealguard.mcp.tools.sanctions_tools.OpenSanctionsProvider")
+    async def test_check_sanctions_no_hits(self, mock_provider_cls):
         """Test sanctions check with no hits."""
         from dealguard.mcp.tools.sanctions_tools import check_sanctions
 
-        mock_instance = AsyncMock()
-        mock_instance.check.return_value = {"hits": [], "count": 0}
-        mock_client.return_value = mock_instance
+        mock_provider = AsyncMock()
+        mock_provider.check_sanctions.return_value = MagicMock(
+            is_sanctioned=False,
+            score=0.0,
+            lists_checked=["EU"],
+            summary="No matches",
+            matches=[],
+        )
+        mock_provider.close = AsyncMock()
+        mock_provider_cls.return_value = mock_provider
 
-        result = await check_sanctions("Normal Person", None)
+        result = await check_sanctions("Normal Person")
+        data = json.loads(result)
 
-        assert "Keine Treffer" in result or "No matches" in result.lower() or "clean" in result.lower()
+        assert data["status"] == "ok"
+        assert data["ist_sanktioniert"] is False
 
     @pytest.mark.asyncio
-    @patch("dealguard.mcp.tools.sanctions_tools.get_sanctions_client")
-    async def test_check_sanctions_with_hits(self, mock_client):
+    @patch("dealguard.mcp.tools.sanctions_tools.OpenSanctionsProvider")
+    async def test_check_sanctions_with_hits(self, mock_provider_cls):
         """Test sanctions check with hits."""
         from dealguard.mcp.tools.sanctions_tools import check_sanctions
 
-        mock_instance = AsyncMock()
-        mock_instance.check.return_value = {
-            "hits": [
+        mock_provider = AsyncMock()
+        mock_provider.check_sanctions.return_value = MagicMock(
+            is_sanctioned=True,
+            score=0.95,
+            lists_checked=["EU"],
+            summary="Match found",
+            matches=[
                 {
                     "name": "Sanctioned Person",
-                    "dataset": "EU Sanctions",
-                    "score": 95,
+                    "schema": "Person",
+                    "score": 0.95,
+                    "datasets": ["EU Sanctions"],
+                    "countries": ["AT"],
                 }
             ],
-            "count": 1,
-        }
-        mock_client.return_value = mock_instance
+        )
+        mock_provider.close = AsyncMock()
+        mock_provider_cls.return_value = mock_provider
 
-        result = await check_sanctions("Sanctioned Person", None)
+        result = await check_sanctions("Sanctioned Person")
+        data = json.loads(result)
 
-        assert "Sanctioned Person" in result or "WARNUNG" in result
+        assert data["ist_sanktioniert"] is True
+        assert data["treffer"][0]["name"] == "Sanctioned Person"
+        assert "warnung" in data
 
 
 class TestDBTools:
     """Tests for DealGuard database tools."""
 
     @pytest.mark.asyncio
-    @patch("dealguard.mcp.tools.db_tools.get_db_session")
-    async def test_search_contracts_returns_results(self, mock_session):
+    async def test_search_contracts_returns_results(self):
         """Test contract search."""
-        from dealguard.mcp.tools.db_tools import search_contracts
+        from dealguard.mcp.tools.db_tools import DbToolContext, search_contracts
 
-        mock_instance = AsyncMock()
-        mock_instance.execute.return_value = MagicMock(
-            scalars=MagicMock(
-                return_value=MagicMock(
-                    all=MagicMock(return_value=[
-                        MagicMock(
-                            id=uuid.uuid4(),
-                            filename="Mietvertrag.pdf",
-                            status="analyzed",
-                            risk_score=45,
-                        )
-                    ])
-                )
+        mock_session = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = [
+            MagicMock(
+                _mapping={
+                    "id": uuid.uuid4(),
+                    "filename": "Mietvertrag.pdf",
+                    "contract_type": "lease",
+                    "status": "analyzed",
+                    "created_at": "2024-01-01",
+                    "risk_score": 45,
+                    "summary": "Kurzfassung.",
+                }
             )
-        )
-        mock_session.return_value.__aenter__.return_value = mock_instance
+        ]
+        mock_session.execute.return_value = result
+        session_cm = AsyncMock()
+        session_cm.__aenter__.return_value = mock_session
+        session_factory = MagicMock(return_value=session_cm)
+        ctx = DbToolContext(session_factory=session_factory, organization_id=uuid.uuid4())
 
-        result = await search_contracts(
-            models.SearchContractsInput(query="Mietvertrag"),
-            organization_id=str(uuid.uuid4()),
-        )
+        result = await search_contracts(ctx, query="Mietvertrag")
 
         assert "Mietvertrag" in result
 
     @pytest.mark.asyncio
-    @patch("dealguard.mcp.tools.db_tools.get_db_session")
-    async def test_get_deadlines_filters_by_days(self, mock_session):
+    async def test_get_deadlines_filters_by_days(self):
         """Test deadline retrieval with days filter."""
-        from dealguard.mcp.tools.db_tools import get_deadlines
+        from dealguard.mcp.tools.db_tools import DbToolContext, get_deadlines
 
-        mock_instance = AsyncMock()
-        mock_instance.execute.return_value = MagicMock(
-            scalars=MagicMock(
-                return_value=MagicMock(
-                    all=MagicMock(return_value=[])
-                )
-            )
-        )
-        mock_session.return_value.__aenter__.return_value = mock_instance
+        mock_session = AsyncMock()
+        result = MagicMock()
+        result.fetchall.return_value = []
+        mock_session.execute.return_value = result
+        session_cm = AsyncMock()
+        session_cm.__aenter__.return_value = mock_session
+        session_factory = MagicMock(return_value=session_cm)
+        ctx = DbToolContext(session_factory=session_factory, organization_id=uuid.uuid4())
 
-        result = await get_deadlines(
-            models.GetDeadlinesInput(days_ahead=7),
-            organization_id=str(uuid.uuid4()),
-        )
+        result = await get_deadlines(ctx, days_ahead=7)
 
         # Should return message about no deadlines
         assert result is not None

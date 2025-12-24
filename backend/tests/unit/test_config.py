@@ -30,6 +30,7 @@ class TestAppSecretKeyValidation:
 
             with pytest.raises(ValidationError) as exc_info:
                 Settings(
+                    _env_file=None,
                     database_url="postgresql+asyncpg://test:test@localhost/test",
                     database_sync_url="postgresql://test:test@localhost/test",
                     # Missing app_secret_key
@@ -46,6 +47,7 @@ class TestAppSecretKeyValidation:
         from dealguard.config import Settings
 
         settings = Settings(
+            _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
             app_secret_key="valid-secret-key-for-testing-123",
@@ -62,6 +64,7 @@ class TestSettingsDefaults:
         from dealguard.config import Settings
 
         settings = Settings(
+            _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
             app_secret_key="test-key-123",
@@ -75,6 +78,7 @@ class TestSettingsDefaults:
         from dealguard.config import Settings
 
         settings = Settings(
+            _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
             app_secret_key="test-key-123",
@@ -87,6 +91,7 @@ class TestSettingsDefaults:
         from dealguard.config import Settings
 
         settings = Settings(
+            _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
             app_secret_key="test-key-123",
@@ -103,6 +108,7 @@ class TestSettingsProperties:
         from dealguard.config import Settings
 
         settings = Settings(
+            _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
             app_secret_key="test-key-123",
@@ -117,10 +123,18 @@ class TestSettingsProperties:
         from dealguard.config import Settings
 
         settings = Settings(
+            _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
-            app_secret_key="test-key-123",
+            app_secret_key="test-secret-key-for-encryption-32chars",
             app_env="production",
+            app_debug=False,
+            auth_provider="supabase",
+            supabase_jwt_secret="test-jwt-secret-at-least-32-chars-long",
+            redis_url="redis://:test-redis@localhost:6379/1",
+            s3_access_key="test-access-key",
+            s3_secret_key="test-secret-key",
+            cors_origins="https://example.com",
         )
 
         assert settings.is_production is True
@@ -153,6 +167,7 @@ class TestAIProviderSettings:
         from dealguard.config import Settings
 
         settings = Settings(
+            _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
             app_secret_key="test-key-123",
@@ -170,6 +185,7 @@ class TestAIProviderSettings:
         from dealguard.config import Settings
 
         settings = Settings(
+            _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
             app_secret_key="test-key-123",

@@ -8,6 +8,8 @@ Jobs:
 - wake_snoozed_alerts_job: Wake up snoozed alerts (cron)
 """
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from uuid import UUID
 
 from arq import cron
@@ -15,7 +17,10 @@ from arq.connections import RedisSettings
 
 from dealguard.config import get_settings
 from dealguard.infrastructure.ai.cost_tracker import CostTracker
-from dealguard.infrastructure.ai.factory import get_ai_client
+from dealguard.infrastructure.ai.factory import AIClient, get_ai_client
+from dealguard.infrastructure.ai.prompts.deadline_extraction_v1 import (
+    DeadlineExtractionPromptV1,
+)
 from dealguard.infrastructure.database.connection import get_session_factory
 from dealguard.infrastructure.database.models.organization import Organization
 from dealguard.infrastructure.database.repositories.contract import (
@@ -25,14 +30,32 @@ from dealguard.infrastructure.database.repositories.contract import (
 from dealguard.infrastructure.document.extractor import DocumentExtractor
 from dealguard.infrastructure.storage.s3 import S3Storage
 from dealguard.domain.contracts.services import ContractAnalysisService
-from dealguard.domain.proactive.deadline_service import DeadlineService
+from dealguard.domain.proactive.deadline_service import (
+    DeadlineExtractionService,
+    DeadlineMonitoringService,
+)
 from dealguard.domain.proactive.alert_service import AlertService
 from dealguard.domain.proactive.risk_radar_service import RiskRadarService
 from dealguard.shared.context import TenantContext, set_tenant_context
 from dealguard.shared.logging import get_logger, setup_logging
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class JobContext:
+    session_factory: Callable[[], AsyncSession]
+    storage: S3Storage
+    extractor: DocumentExtractor
+    ai_client: AIClient
+
+
+@dataclass
+class JobState:
+    session: AsyncSession
+    contract_service: ContractAnalysisService
 
 
 # ----- Job Functions -----
@@ -72,8 +95,8 @@ async def analyze_contract_job(
             )
         )
 
-        # Get service from context
-        service: ContractAnalysisService = ctx["contract_service"]
+        job_state: JobState = ctx["job_state"]
+        service = job_state.contract_service
 
         # Perform analysis
         analysis = await service.perform_analysis(UUID(contract_id))
@@ -132,8 +155,14 @@ async def extract_deadlines_job(
             )
         )
 
-        session = ctx["session"]
-        deadline_service = DeadlineService(session)
+        job_state: JobState = ctx["job_state"]
+        job_ctx: JobContext = ctx["job_context"]
+        deadline_service = DeadlineExtractionService(
+            session=job_state.session,
+            ai_client=job_ctx.ai_client,
+            prompt=DeadlineExtractionPromptV1(),
+            organization_id=UUID(organization_id),
+        )
 
         deadlines = await deadline_service.extract_deadlines_from_contract(
             UUID(contract_id)
@@ -174,7 +203,8 @@ async def check_deadlines_job(ctx: dict) -> dict:
     logger.info("job_started", job="check_deadlines")
 
     try:
-        session_factory = ctx["session_factory"]
+        job_ctx: JobContext = ctx["job_context"]
+        session_factory = job_ctx.session_factory
         total_alerts = 0
         orgs_processed = 0
 
@@ -198,7 +228,11 @@ async def check_deadlines_job(ctx: dict) -> dict:
                         )
                     )
 
-                    deadline_service = DeadlineService(session)
+                    deadline_service = DeadlineMonitoringService(
+                        session,
+                        organization_id=org.id,
+                        user_id=org.id,
+                    )
                     alerts = await deadline_service.check_and_generate_alerts()
                     await session.commit()
 
@@ -239,7 +273,8 @@ async def create_risk_snapshot_job(ctx: dict) -> dict:
     logger.info("job_started", job="create_risk_snapshot")
 
     try:
-        session_factory = ctx["session_factory"]
+        job_ctx: JobContext = ctx["job_context"]
+        session_factory = job_ctx.session_factory
         orgs_processed = 0
 
         # Get all organizations
@@ -261,7 +296,10 @@ async def create_risk_snapshot_job(ctx: dict) -> dict:
                         )
                     )
 
-                    risk_radar_service = RiskRadarService(session)
+                    risk_radar_service = RiskRadarService(
+                        session,
+                        organization_id=org.id,
+                    )
                     await risk_radar_service.create_daily_snapshot()
                     await session.commit()
 
@@ -299,7 +337,8 @@ async def wake_snoozed_alerts_job(ctx: dict) -> dict:
     logger.info("job_started", job="wake_snoozed_alerts")
 
     try:
-        session_factory = ctx["session_factory"]
+        job_ctx: JobContext = ctx["job_context"]
+        session_factory = job_ctx.session_factory
         total_awakened = 0
 
         # Get all organizations
@@ -321,7 +360,11 @@ async def wake_snoozed_alerts_job(ctx: dict) -> dict:
                         )
                     )
 
-                    alert_service = AlertService(session)
+                    alert_service = AlertService(
+                        session,
+                        organization_id=org.id,
+                        user_id=org.id,
+                    )
                     count = await alert_service.wake_snoozed_alerts()
                     await session.commit()
 
@@ -367,10 +410,12 @@ async def startup(ctx: dict) -> None:
 
     # Create shared services
     # Note: Each job will get its own session from the factory
-    ctx["session_factory"] = session_factory
-    ctx["storage"] = S3Storage()
-    ctx["extractor"] = DocumentExtractor()
-    ctx["ai_client"] = get_ai_client(CostTracker())
+    ctx["job_context"] = JobContext(
+        session_factory=session_factory,
+        storage=S3Storage(),
+        extractor=DocumentExtractor(),
+        ai_client=get_ai_client(CostTracker()),
+    )
 
     logger.info("worker_started")
 
@@ -384,33 +429,32 @@ async def shutdown(ctx: dict) -> None:
 
 async def on_job_start(ctx: dict) -> None:
     """Called before each job starts."""
-    # Create a new session for this job
-    session_factory = ctx["session_factory"]
-    session = session_factory()
-    ctx["session"] = session
-
-    # Create service with fresh session
-    ctx["contract_service"] = ContractAnalysisService(
-        contract_repo=ContractRepository(session),
-        analysis_repo=ContractAnalysisRepository(session),
-        ai_client=ctx["ai_client"],
-        storage=ctx["storage"],
-        extractor=ctx["extractor"],
+    job_ctx: JobContext = ctx["job_context"]
+    session = job_ctx.session_factory()
+    ctx["job_state"] = JobState(
+        session=session,
+        contract_service=ContractAnalysisService(
+            contract_repo=ContractRepository(session),
+            analysis_repo=ContractAnalysisRepository(session),
+            ai_client=job_ctx.ai_client,
+            storage=job_ctx.storage,
+            extractor=job_ctx.extractor,
+        ),
     )
 
 
 async def on_job_end(ctx: dict) -> None:
     """Called after each job completes."""
     # Commit and close session
-    session = ctx.get("session")
-    if session:
+    job_state: JobState | None = ctx.get("job_state")
+    if job_state:
         try:
-            await session.commit()
+            await job_state.session.commit()
         except Exception:
-            await session.rollback()
+            await job_state.session.rollback()
             raise
         finally:
-            await session.close()
+            await job_state.session.close()
 
 
 def get_redis_settings() -> RedisSettings:

@@ -11,7 +11,7 @@ For the MCP Server, it needs to be provided via environment or configuration.
 """
 
 import logging
-import os
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -22,60 +22,23 @@ from sqlalchemy.orm import sessionmaker
 
 logger = logging.getLogger(__name__)
 
-# Database connection (lazy initialization)
-_async_engine = None
-_async_session_factory = None
+@dataclass(frozen=True)
+class DbToolContext:
+    """Explicit database context for MCP DB tools."""
+
+    session_factory: sessionmaker
+    organization_id: UUID
 
 
-def _get_database_url() -> str:
-    """Get database URL from environment."""
-    return os.environ.get(
-        "DATABASE_URL",
-        "postgresql+asyncpg://dealguard:dealguard@localhost:5432/dealguard",
+def build_db_tool_context(database_url: str, organization_id: UUID) -> DbToolContext:
+    """Build a DbToolContext with its own engine/session factory."""
+    engine = create_async_engine(database_url)
+    session_factory = sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
     )
-
-
-async def _get_session() -> AsyncSession:
-    """Get a database session."""
-    global _async_engine, _async_session_factory
-
-    if _async_engine is None:
-        _async_engine = create_async_engine(_get_database_url())
-        _async_session_factory = sessionmaker(
-            _async_engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-        )
-
-    return _async_session_factory()
-
-
-def _get_organization_id(org_id_override: UUID | str | None = None) -> UUID | None:
-    """Get organization ID from context or override.
-
-    Args:
-        org_id_override: Explicit organization ID (preferred for thread safety)
-
-    In MCP mode, this comes from environment.
-    In Chat API mode, this should be passed explicitly via org_id_override.
-    """
-    # Prefer explicit override (thread-safe)
-    if org_id_override:
-        return UUID(str(org_id_override)) if isinstance(org_id_override, str) else org_id_override
-
-    # Fallback to TenantContext (set by auth middleware)
-    try:
-        from dealguard.shared.context import get_tenant_context
-        return get_tenant_context().organization_id
-    except Exception:
-        pass
-
-    # Last resort: env var (NOT thread-safe, only for MCP standalone)
-    env_org_id = os.environ.get("DEALGUARD_ORGANIZATION_ID")
-    if env_org_id:
-        return UUID(env_org_id)
-
-    return None
+    return DbToolContext(session_factory=session_factory, organization_id=organization_id)
 
 
 def _format_contract(contract: dict[str, Any]) -> str:
@@ -168,10 +131,10 @@ def _format_deadline(deadline: dict[str, Any]) -> str:
 
 
 async def search_contracts(
+    ctx: DbToolContext,
     query: str,
     contract_type: str | None = None,
     limit: int = 10,
-    organization_id: UUID | str | None = None,
 ) -> str:
     """Search contracts by keyword.
 
@@ -181,17 +144,13 @@ async def search_contracts(
         query: Search terms
         contract_type: Optional filter by type
         limit: Maximum results
-        organization_id: Explicit organization ID (for thread-safe API calls)
-
     Returns:
         Formatted list of matching contracts
     """
-    org_id = _get_organization_id(organization_id)
-    if org_id is None:
-        return "Fehler: Keine Organisation im Kontext. Bitte einloggen."
+    org_id = ctx.organization_id
 
     try:
-        async with await _get_session() as session:
+        async with ctx.session_factory() as session:
             # Build query with full-text search
             # Using to_tsvector and to_tsquery for PostgreSQL FTS
             sql = text("""
@@ -245,21 +204,17 @@ async def search_contracts(
 
 
 async def get_contract(
+    ctx: DbToolContext,
     contract_id: str,
-    organization_id: UUID | str | None = None,
 ) -> str:
     """Get full details of a specific contract.
 
     Args:
         contract_id: UUID of the contract
-        organization_id: Explicit organization ID (for thread-safe API calls)
-
     Returns:
         Full contract details including analysis
     """
-    org_id = _get_organization_id(organization_id)
-    if org_id is None:
-        return "Fehler: Keine Organisation im Kontext."
+    org_id = ctx.organization_id
 
     try:
         contract_uuid = UUID(contract_id)
@@ -267,7 +222,7 @@ async def get_contract(
         return f"Ungültige Vertrags-ID: {contract_id}"
 
     try:
-        async with await _get_session() as session:
+        async with ctx.session_factory() as session:
             # Get contract with analysis
             sql = text("""
                 SELECT
@@ -396,26 +351,22 @@ async def get_contract(
 
 
 async def get_partners(
+    ctx: DbToolContext,
     risk_level: str | None = None,
     limit: int = 20,
-    organization_id: UUID | str | None = None,
 ) -> str:
     """List all business partners with their risk scores.
 
     Args:
         risk_level: Filter by risk level (low, medium, high, critical)
         limit: Maximum results
-        organization_id: Explicit organization ID (for thread-safe API calls)
-
     Returns:
         Formatted list of partners
     """
-    org_id = _get_organization_id(organization_id)
-    if org_id is None:
-        return "Fehler: Keine Organisation im Kontext."
+    org_id = ctx.organization_id
 
     try:
-        async with await _get_session() as session:
+        async with ctx.session_factory() as session:
             sql = text("""
                 SELECT
                     id,
@@ -475,26 +426,22 @@ async def get_partners(
 
 
 async def get_deadlines(
+    ctx: DbToolContext,
     days_ahead: int = 30,
     include_overdue: bool = True,
-    organization_id: UUID | str | None = None,
 ) -> str:
     """Get upcoming deadlines from contracts.
 
     Args:
         days_ahead: How many days to look ahead
         include_overdue: Include overdue deadlines
-        organization_id: Explicit organization ID (for thread-safe API calls)
-
     Returns:
         Formatted list of deadlines
     """
-    org_id = _get_organization_id(organization_id)
-    if org_id is None:
-        return "Fehler: Keine Organisation im Kontext."
+    org_id = ctx.organization_id
 
     try:
-        async with await _get_session() as session:
+        async with ctx.session_factory() as session:
             today = date.today()
             end_date = today + timedelta(days=days_ahead)
 

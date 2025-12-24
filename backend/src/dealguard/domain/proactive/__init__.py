@@ -1,18 +1,24 @@
 """Proactive AI-Jurist domain.
 
 This module provides proactive monitoring and alerting:
-- DeadlineService: Extract and monitor contract deadlines
+- DeadlineExtractionService: Extract contract deadlines using AI
+- DeadlineMonitoringService: Monitor deadlines and generate alerts
 - AlertService: Generate and manage proactive alerts
 - RiskRadarService: Combined risk monitoring
 - ComplianceService: Periodic compliance scanning
 """
 
-from dealguard.domain.proactive.deadline_service import DeadlineService, DeadlineStats
+from dealguard.domain.proactive.deadline_service import (
+    DeadlineExtractionService,
+    DeadlineMonitoringService,
+    DeadlineStats,
+)
 from dealguard.domain.proactive.alert_service import AlertService, AlertFilter, AlertStats
 from dealguard.domain.proactive.risk_radar_service import RiskRadarService, RiskRadarResult, RiskCategory
 
 __all__ = [
-    "DeadlineService",
+    "DeadlineExtractionService",
+    "DeadlineMonitoringService",
     "DeadlineStats",
     "AlertService",
     "AlertFilter",

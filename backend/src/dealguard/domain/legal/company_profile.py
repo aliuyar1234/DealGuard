@@ -12,7 +12,6 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.infrastructure.database.models.organization import Organization
-from dealguard.shared.context import get_tenant_context
 from dealguard.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -76,12 +75,13 @@ class CompanyProfileService:
 
     SETTINGS_KEY = "legal_profile"
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, organization_id: UUID) -> None:
         self.session = session
+        self.organization_id = organization_id
 
     def _get_organization_id(self) -> UUID:
         """Get current tenant's organization ID."""
-        return get_tenant_context().organization_id
+        return self.organization_id
 
     async def get_profile(self) -> CompanyProfile:
         """Get the company's legal profile.

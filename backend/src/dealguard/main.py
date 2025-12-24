@@ -15,10 +15,12 @@ from dealguard.api.ratelimit import limiter, rate_limit_exceeded_handler
 from dealguard.api.router import api_router
 from dealguard.config import get_settings
 from dealguard.infrastructure.queue.client import close_queue_pool
+from dealguard.observability.metrics import setup_metrics
 from dealguard.shared.exceptions import (
     AuthenticationError,
     DealGuardError,
     NotFoundError,
+    QuotaExceededError,
     UnauthorizedError,
     ValidationError,
 )
@@ -83,6 +85,9 @@ def create_app() -> FastAPI:
     # Include routers
     app.include_router(api_router, prefix="/api/v1")
 
+    # Observability
+    setup_metrics(app)
+
     return app
 
 
@@ -132,6 +137,19 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=404,
             content={
                 "error": "not_found",
+                "message": exc.message,
+                "details": exc.details,
+            },
+        )
+
+    @app.exception_handler(QuotaExceededError)
+    async def quota_exceeded_handler(
+        request: Request, exc: QuotaExceededError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "quota_exceeded",
                 "message": exc.message,
                 "details": exc.details,
             },

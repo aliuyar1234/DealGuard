@@ -142,6 +142,8 @@ async def upload_contract(
         filename=file.filename or "unknown",
         mime_type=file.content_type,
         contract_type=contract_type,
+        organization_id=user.organization_id,
+        user_id=user.id,
     )
 
     # Queue background analysis job

@@ -10,7 +10,6 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dealguard.shared.context import get_tenant_context
 from dealguard.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -62,12 +61,13 @@ class KnowledgeRetriever:
     # Maximum total context length (to avoid huge prompts)
     MAX_TOTAL_CONTEXT = 3000
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, organization_id: UUID) -> None:
         self.session = session
+        self.organization_id = organization_id
 
     def _get_organization_id(self) -> UUID:
         """Get current tenant's organization ID."""
-        return get_tenant_context().organization_id
+        return self.organization_id
 
     async def search_contracts(
         self,
