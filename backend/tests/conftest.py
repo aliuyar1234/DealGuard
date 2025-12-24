@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import asyncpg
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -17,6 +18,8 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+
+os.environ.setdefault("APP_SECRET_KEY", "test-secret-key-for-encryption-32chars")
 
 from dealguard.config import Settings
 from dealguard.infrastructure.database.models.base import Base
@@ -34,6 +37,10 @@ TEST_DATABASE_SYNC_URL = os.getenv(
     "TEST_DATABASE_SYNC_URL",
     "postgresql://dealguard:dealguard@localhost:5432/dealguard_test"
 )
+TEST_REDIS_URL = os.getenv(
+    "TEST_REDIS_URL",
+    "redis://localhost:6379/1",
+)
 
 
 @pytest.fixture(scope="session")
@@ -50,7 +57,7 @@ def test_settings() -> Settings:
     return Settings(
         database_url=TEST_DATABASE_URL,
         database_sync_url=TEST_DATABASE_SYNC_URL,
-        redis_url="redis://localhost:6379/1",
+        redis_url=TEST_REDIS_URL,
         supabase_url="https://test.supabase.co",
         supabase_anon_key="test-anon-key",
         supabase_service_role_key="test-service-key",
@@ -73,11 +80,22 @@ async def async_engine(test_settings: Settings):
         echo=False,
     )
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except (
+        asyncpg.exceptions.InvalidPasswordError,
+        asyncpg.exceptions.InvalidCatalogNameError,
+        ConnectionRefusedError,
+        OSError,
+    ) as exc:
+        await engine.dispose()
+        if os.getenv("REQUIRE_TEST_DB") == "1":
+            raise
+        pytest.skip(f"Postgres unavailable for integration tests: {exc}")
 
     yield engine
-
+ 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 

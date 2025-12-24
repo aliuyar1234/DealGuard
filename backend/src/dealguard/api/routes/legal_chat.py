@@ -94,9 +94,13 @@ class CreateConversationRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────
 
 
-async def get_chat_service(session: SessionDep) -> LegalChatService:
+async def get_chat_service(session: SessionDep, user: CurrentUser) -> LegalChatService:
     """Get legal chat service."""
-    return LegalChatService(session)
+    return LegalChatService(
+        session,
+        organization_id=user.organization_id,
+        user_id=user.id,
+    )
 
 
 ChatServiceDep = Annotated[LegalChatService, Depends(get_chat_service)]

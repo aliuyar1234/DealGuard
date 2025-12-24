@@ -1,6 +1,8 @@
 """Base repository with tenant isolation."""
 
-from typing import Generic, TypeVar, Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from typing import Generic, TypeVar
 from uuid import UUID
 
 from sqlalchemy import select, func
@@ -30,7 +32,7 @@ class BaseRepository(Generic[T]):
         return get_tenant_context().organization_id
 
     def _base_query(self, include_deleted: bool = False):
-        """Create a base query filtered by tenant and soft-delete status.
+        """Create a base query filtered by tenant and soft-delete status.       
 
         All queries should start from this method to ensure tenant isolation.
 
@@ -43,6 +45,12 @@ class BaseRepository(Generic[T]):
         if not include_deleted and hasattr(self.model_class, "deleted_at"):
             query = query.where(self.model_class.deleted_at.is_(None))
         return query
+
+    @asynccontextmanager
+    async def begin_nested(self) -> AsyncIterator[None]:
+        """Begin a nested transaction scope for multi-step updates."""
+        async with self.session.begin_nested():
+            yield
 
     async def get_by_id(self, id: UUID) -> T | None:
         """Get entity by ID, filtered by tenant."""

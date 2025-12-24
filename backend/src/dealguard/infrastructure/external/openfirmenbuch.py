@@ -234,7 +234,7 @@ class OpenFirmenbuchProvider(CompanyDataProvider):
             "Gen",  # Genossenschaft
         ]
 
-        for form in legal_forms:
+        for form in sorted(legal_forms, key=len, reverse=True):
             if form.lower() in name.lower():
                 return form
 

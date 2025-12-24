@@ -92,7 +92,7 @@ class TestCryptoFunctions:
             "with spaces and special chars !@#$%",
             "unicode: äöü ß € 日本語",
             "a" * 1000,  # Long string
-            "sk-ant-api03-very-long-api-key-1234567890abcdef",
+            "very-long-placeholder-key-1234567890abcdef",
         ]
 
         for plaintext in test_cases:

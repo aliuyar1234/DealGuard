@@ -1,5 +1,6 @@
 """Health check endpoints."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends
@@ -71,6 +72,28 @@ async def readiness_check(
     except Exception as e:
         logger.warning(f"Redis health check failed: {e}")
         checks["redis"] = False
+
+    # Check S3 storage
+    try:
+        import boto3
+        from botocore.config import Config
+
+        settings = get_settings()
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=settings.s3_endpoint,
+            aws_access_key_id=settings.s3_access_key,
+            aws_secret_access_key=settings.s3_secret_key,
+            region_name=settings.s3_region,
+            config=Config(signature_version="s3v4"),
+        )
+        await asyncio.to_thread(
+            s3_client.list_objects_v2, Bucket=settings.s3_bucket, MaxKeys=1
+        )
+        checks["storage"] = True
+    except Exception as e:
+        logger.warning(f"S3 health check failed: {e}")
+        checks["storage"] = False
 
     all_ready = all(checks.values())
 

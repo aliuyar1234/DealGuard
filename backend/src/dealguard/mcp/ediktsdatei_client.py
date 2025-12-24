@@ -11,12 +11,17 @@ IWG = Informationsweiterverwendungsgesetz (PSI Directive implementation)
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
+from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
+
+from dealguard.shared.exceptions import ExternalServiceError
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +107,53 @@ class EdikteSearchResult:
     page: int  # Current page
     page_size: int  # Results per page
     items: list[InsolvenzEdikt | VersteigerungEdikt]
+
+
+_AKTENZEICHEN_RE = re.compile(r"\b\d+\s*[A-Z]?\s*\d+/\d+\b", re.IGNORECASE)
+_DATE_RE = re.compile(r"\b\d{1,2}\.\d{1,2}\.\d{4}\b|\b\d{4}-\d{2}-\d{2}\b")
+
+
+class _EdikteHTMLParser(HTMLParser):
+    """Collect rows and links from HTML tables for best-effort scraping."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[dict[str, list[str]]] = []
+        self._in_row = False
+        self._in_cell = False
+        self._cell_chunks: list[str] = []
+        self._row_cells: list[str] = []
+        self._row_links: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self._in_row = True
+            self._row_cells = []
+            self._row_links = []
+        elif self._in_row and tag in ("td", "th"):
+            self._in_cell = True
+            self._cell_chunks = []
+        elif self._in_cell and tag == "a":
+            href = dict(attrs).get("href")
+            if href:
+                self._row_links.append(href)
+
+    def handle_data(self, data: str) -> None:
+        if self._in_cell:
+            self._cell_chunks.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("td", "th") and self._in_cell:
+            text = " ".join("".join(self._cell_chunks).split())
+            self._row_cells.append(text)
+            self._cell_chunks = []
+            self._in_cell = False
+        elif tag == "tr" and self._in_row:
+            if any(cell for cell in self._row_cells):
+                self.rows.append(
+                    {"cells": self._row_cells, "links": self._row_links}
+                )
+            self._in_row = False
 
 
 class EdiktsdateiClient:
@@ -279,7 +331,14 @@ class EdiktsdateiClient:
             if response.status_code != 200:
                 return await self._scrape_insolvenz_search(name, bundesland, limit)
 
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                logger.warning(
+                    "ediktsdatei_invalid_json",
+                    status=response.status_code,
+                )
+                return await self._scrape_insolvenz_search(name, bundesland, limit)
 
             items = []
             for item in data.get("results", data.get("items", [])):
@@ -296,6 +355,9 @@ class EdiktsdateiClient:
             logger.error(f"Ediktsdatei API request failed: {e}")
             # Fall back to scraping
             return await self._scrape_insolvenz_search(name, bundesland, limit)
+
+        except ExternalServiceError:
+            raise
 
         except Exception as e:
             logger.error(f"Failed to search Ediktsdatei: {e}")
@@ -326,17 +388,179 @@ class EdiktsdateiClient:
             )
 
             if response.status_code != 200:
-                logger.warning(f"Ediktsdatei search returned {response.status_code}")
+                raise ExternalServiceError(
+                    f"Ediktsdatei HTML-Suche fehlgeschlagen (Status {response.status_code})"
+                )
+
+            html = response.text
+            html_lower = html.lower()
+            if "keine" in html_lower and ("treffer" in html_lower or "ergebnisse" in html_lower):
                 return EdikteSearchResult(total=0, page=1, page_size=limit, items=[])
 
-            # For now, return empty results
-            # TODO: Implement HTML parsing if JSON API is not available
-            logger.info("Ediktsdatei: HTML scraping not implemented, returning empty results")
-            return EdikteSearchResult(total=0, page=1, page_size=limit, items=[])
+            parser = _EdikteHTMLParser()
+            parser.feed(html)
+            rows = parser.rows
+            if not rows:
+                raise ExternalServiceError(
+                    "Ediktsdatei HTML konnte nicht geparst werden (keine Tabellenzeilen)."
+                )
 
+            header_idx = None
+            header_cells: list[str] = []
+            for idx, row in enumerate(rows):
+                cells = [cell.lower() for cell in row["cells"]]
+                if any("aktenzeichen" in cell or cell == "az" for cell in cells) and any(
+                    "schuldner" in cell or "name" in cell for cell in cells
+                ):
+                    header_idx = idx
+                    header_cells = cells
+                    break
+
+            items: list[InsolvenzEdikt] = []
+
+            if header_idx is not None:
+                def find_col(keys: tuple[str, ...]) -> int | None:
+                    for i, cell in enumerate(header_cells):
+                        if any(key in cell for key in keys):
+                            return i
+                    return None
+
+                idx_az = find_col(("aktenzeichen", "az"))
+                idx_name = find_col(("schuldner", "name"))
+                idx_gericht = find_col(("gericht",))
+                idx_art = find_col(("verfahrensart", "art"))
+                idx_status = find_col(("status",))
+                idx_datum = find_col(("kundmach", "datum"))
+                idx_frist = find_col(("frist",))
+                idx_verwalter = find_col(("verwalter",))
+
+                for row in rows[header_idx + 1 :]:
+                    cells = row["cells"]
+                    if not any(cells):
+                        continue
+
+                    def cell_at(col_idx: int | None) -> str:
+                        if col_idx is None or col_idx >= len(cells):
+                            return ""
+                        return cells[col_idx].strip()
+
+                    aktenzeichen = cell_at(idx_az)
+                    schuldner = cell_at(idx_name)
+                    gericht = cell_at(idx_gericht)
+                    verfahrensart = cell_at(idx_art)
+                    status = cell_at(idx_status)
+                    kundmachung = self._parse_date(cell_at(idx_datum)) or date.today()
+                    frist = self._parse_date(cell_at(idx_frist))
+                    verwalter = cell_at(idx_verwalter) or None
+
+                    if not schuldner and not aktenzeichen and not gericht:
+                        continue
+
+                    details_url = (
+                        urljoin(EDIKTE_BASE_URL, row["links"][0])
+                        if row["links"]
+                        else f"{EDIKTE_BASE_URL}/edikte/insolvenz"
+                    )
+
+                    items.append(
+                        InsolvenzEdikt(
+                            id=aktenzeichen or f"scraped-{len(items) + 1}",
+                            aktenzeichen=aktenzeichen,
+                            gericht=gericht,
+                            gericht_code="",
+                            schuldner_name=schuldner,
+                            schuldner_adresse=None,
+                            verfahrensart=verfahrensart,
+                            status=status,
+                            eroeffnungsdatum=None,
+                            kundmachungsdatum=kundmachung,
+                            frist_forderungsanmeldung=frist,
+                            insolvenzverwalter=verwalter,
+                            details_url=details_url,
+                        )
+                    )
+                if not items:
+                    return EdikteSearchResult(
+                        total=0,
+                        page=1,
+                        page_size=limit,
+                        items=[],
+                    )
+            else:
+                for row in rows:
+                    row_text = " ".join(row["cells"])
+                    akten_match = _AKTENZEICHEN_RE.search(row_text)
+                    date_match = _DATE_RE.search(row_text)
+
+                    aktenzeichen = akten_match.group(0) if akten_match else ""
+                    kundmachung = self._parse_date(date_match.group(0)) if date_match else None
+
+                    gericht = ""
+                    for cell in row["cells"]:
+                        cell_lower = cell.lower()
+                        if "gericht" in cell_lower or cell_lower.startswith(("lg", "bg", "hg")):
+                            gericht = cell
+                            break
+
+                    schuldner = ""
+                    for cell in row["cells"]:
+                        cell_lower = cell.lower()
+                        if (
+                            cell
+                            and cell != aktenzeichen
+                            and not _DATE_RE.search(cell)
+                            and "gericht" not in cell_lower
+                        ):
+                            schuldner = cell
+                            break
+
+                    if not schuldner and not aktenzeichen and not gericht:
+                        continue
+
+                    details_url = (
+                        urljoin(EDIKTE_BASE_URL, row["links"][0])
+                        if row["links"]
+                        else f"{EDIKTE_BASE_URL}/edikte/insolvenz"
+                    )
+
+                    items.append(
+                        InsolvenzEdikt(
+                            id=aktenzeichen or f"scraped-{len(items) + 1}",
+                            aktenzeichen=aktenzeichen,
+                            gericht=gericht,
+                            gericht_code="",
+                            schuldner_name=schuldner,
+                            schuldner_adresse=None,
+                            verfahrensart="",
+                            status="",
+                            eroeffnungsdatum=None,
+                            kundmachungsdatum=kundmachung or date.today(),
+                            frist_forderungsanmeldung=None,
+                            insolvenzverwalter=None,
+                            details_url=details_url,
+                        )
+                    )
+
+            if not items:
+                raise ExternalServiceError(
+                    "Ediktsdatei HTML konnte nicht ausgewertet werden (keine verwertbaren Ergebnisse)."
+                )
+
+            items = items[:limit]
+            return EdikteSearchResult(
+                total=len(items),
+                page=1,
+                page_size=limit,
+                items=items,
+            )
+
+        except ExternalServiceError:
+            raise
         except Exception as e:
             logger.error(f"Failed to scrape Ediktsdatei: {e}")
-            return EdikteSearchResult(total=0, page=1, page_size=limit, items=[])
+            raise ExternalServiceError(
+                "Ediktsdatei HTML-Suche fehlgeschlagen (unerwarteter Fehler)."
+            ) from e
 
     async def search_versteigerungen(
         self,

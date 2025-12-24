@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from dealguard.api.middleware.auth import CurrentUser, RequireMember
+from dealguard.config import Settings, get_settings
 from dealguard.domain.partners.services import PartnerService
 from dealguard.domain.partners.check_service import PartnerCheckService
 from dealguard.infrastructure.database.connection import SessionDep
@@ -16,6 +17,8 @@ from dealguard.infrastructure.external.mock_provider import (
     MockSanctionProvider,
     MockInsolvencyProvider,
 )
+from dealguard.infrastructure.external.openfirmenbuch import OpenFirmenbuchProvider
+from dealguard.infrastructure.external.opensanctions import OpenSanctionsProvider
 from dealguard.infrastructure.database.models.partner import (
     PartnerType,
     PartnerRiskLevel,
@@ -86,6 +89,7 @@ class PartnerCheckResponse(BaseModel):
     status: CheckStatus
     score: int | None
     result_summary: str | None
+    error_message: str | None = None
     provider: str | None
     created_at: str
 
@@ -184,14 +188,16 @@ PartnerServiceDep = Annotated[PartnerService, Depends(get_partner_service)]
 
 
 async def get_partner_check_service(session: SessionDep) -> PartnerCheckService:
-    """Get partner check service with mock providers for development."""
+    """Get partner check service with providers based on environment."""
+    settings = get_settings()
+    providers = _build_partner_providers(settings)
     return PartnerCheckService(
         partner_repo=PartnerRepository(session),
         check_repo=PartnerCheckRepository(session),
-        company_provider=MockCompanyProvider(),
-        credit_provider=MockCreditProvider(),
-        sanction_provider=MockSanctionProvider(),
-        insolvency_provider=MockInsolvencyProvider(),
+        company_provider=providers["company_provider"],
+        credit_provider=providers["credit_provider"],
+        sanction_provider=providers["sanction_provider"],
+        insolvency_provider=providers["insolvency_provider"],
     )
 
 
@@ -199,6 +205,23 @@ PartnerCheckServiceDep = Annotated[PartnerCheckService, Depends(get_partner_chec
 
 
 # ----- Helper Functions -----
+
+
+def _build_partner_providers(settings: Settings) -> dict[str, object]:
+    if settings.is_development:
+        return {
+            "company_provider": MockCompanyProvider(),
+            "credit_provider": MockCreditProvider(),
+            "sanction_provider": MockSanctionProvider(),
+            "insolvency_provider": MockInsolvencyProvider(),
+        }
+
+    return {
+        "company_provider": OpenFirmenbuchProvider(),
+        "credit_provider": MockCreditProvider(),
+        "sanction_provider": OpenSanctionsProvider(),
+        "insolvency_provider": MockInsolvencyProvider(),
+    }
 
 
 def _check_to_response(check) -> PartnerCheckResponse:
@@ -209,6 +232,7 @@ def _check_to_response(check) -> PartnerCheckResponse:
         status=check.status,
         score=check.score,
         result_summary=check.result_summary,
+        error_message=getattr(check, "error_message", None),
         provider=check.provider,
         created_at=check.created_at.isoformat(),
     )
@@ -293,6 +317,7 @@ async def create_partner(
     partner = await service.create_partner(
         name=request.name,
         partner_type=request.partner_type,
+        created_by=user.id,
         handelsregister_id=request.handelsregister_id,
         tax_id=request.tax_id,
         vat_id=request.vat_id,
@@ -536,7 +561,7 @@ async def dismiss_alert(
 ) -> PartnerAlertResponse:
     """Dismiss an alert."""
     try:
-        alert = await service.dismiss_alert(alert_id)
+        alert = await service.dismiss_alert(alert_id, dismissed_by=user.id)
         return _alert_to_response(alert)
     except NotFoundError:
         raise HTTPException(404, "Alert nicht gefunden")

@@ -1,6 +1,8 @@
 """Application configuration using Pydantic Settings."""
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
@@ -10,6 +12,46 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Default IDs for single-tenant mode (self-hosted)
 DEFAULT_ORGANIZATION_ID = UUID("00000000-0000-0000-0000-000000000001")
 DEFAULT_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
+
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://dealguard:dealguard@localhost:5432/dealguard"
+DEFAULT_DATABASE_SYNC_URL = "postgresql://dealguard:dealguard@localhost:5432/dealguard"
+DEFAULT_REDIS_URL = "redis://localhost:6379"
+DEFAULT_S3_ACCESS_KEY = "minio"
+DEFAULT_S3_SECRET_KEY = "minio123"
+INSECURE_APP_SECRETS = {
+    "GENERATE_A_SECURE_KEY_HERE",
+    "change-me-to-a-32-char-secret-key",
+    "change-this-to-a-random-secret-key",
+}
+SECRET_FILE_ENV_VARS = (
+    "APP_SECRET_KEY",
+    "DATABASE_URL",
+    "DATABASE_SYNC_URL",
+    "REDIS_URL",
+    "SUPABASE_JWT_SECRET",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_ANON_KEY",
+    "ANTHROPIC_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "S3_ACCESS_KEY",
+    "S3_SECRET_KEY",
+)
+
+
+def _load_secret_file_env_vars() -> None:
+    """Allow secrets to be sourced from *_FILE env vars (Docker secrets)."""
+    for env_var in SECRET_FILE_ENV_VARS:
+        file_var = f"{env_var}_FILE"
+        file_path = os.getenv(file_var)
+        if not file_path:
+            continue
+        try:
+            value = Path(file_path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise RuntimeError(f"Failed to read {file_var} at {file_path}") from exc
+        if not value:
+            raise ValueError(f"{file_var} is empty")
+        os.environ[env_var] = value
 
 
 class Settings(BaseSettings):
@@ -35,17 +77,13 @@ class Settings(BaseSettings):
     single_tenant_mode: bool = True
 
     # ----- Database -----
-    database_url: PostgresDsn = Field(
-        default="postgresql+asyncpg://dealguard:dealguard@localhost:5432/dealguard"
-    )
-    database_sync_url: PostgresDsn = Field(
-        default="postgresql://dealguard:dealguard@localhost:5432/dealguard"
-    )
+    database_url: PostgresDsn = Field(default=DEFAULT_DATABASE_URL)
+    database_sync_url: PostgresDsn = Field(default=DEFAULT_DATABASE_SYNC_URL)
     database_pool_size: int = 5
     database_max_overflow: int = 10
 
     # ----- Redis -----
-    redis_url: RedisDsn = Field(default="redis://localhost:6379")
+    redis_url: RedisDsn = Field(default=DEFAULT_REDIS_URL)
 
     # ----- Auth -----
     auth_provider: Literal["supabase", "dev"] = "supabase"  # Use "dev" for local testing
@@ -71,8 +109,8 @@ class Settings(BaseSettings):
 
     # ----- S3 Storage -----
     s3_endpoint: str = "http://localhost:9000"
-    s3_access_key: str = "minio"
-    s3_secret_key: str = "minio123"
+    s3_access_key: str = DEFAULT_S3_ACCESS_KEY
+    s3_secret_key: str = DEFAULT_S3_SECRET_KEY
     s3_bucket: str = "dealguard-documents"
     s3_region: str = "eu-central-1"
 
@@ -105,6 +143,12 @@ class Settings(BaseSettings):
     def validate_production_settings(self) -> "Settings":
         """Ensure secure settings in production environment."""
         if self.is_production:
+            if self.app_debug:
+                raise ValueError("APP_DEBUG must be false in production!")
+            if len(self.app_secret_key) < 32 or self.app_secret_key in INSECURE_APP_SECRETS:
+                raise ValueError(
+                    "APP_SECRET_KEY must be at least 32 characters and not a placeholder!"
+                )
             # Dev auth is not allowed in production
             if self.auth_provider == "dev":
                 raise ValueError(
@@ -116,10 +160,25 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "SUPABASE_JWT_SECRET must be set in production!"
                 )
+            if str(self.database_url) == DEFAULT_DATABASE_URL:
+                raise ValueError("DATABASE_URL must be set to a production database!")
+            if str(self.database_sync_url) == DEFAULT_DATABASE_SYNC_URL:
+                raise ValueError("DATABASE_SYNC_URL must be set to a production database!")
+            if str(self.redis_url) == DEFAULT_REDIS_URL or "@" not in str(self.redis_url):
+                raise ValueError(
+                    "REDIS_URL must include credentials in production (redis://:password@host:port/db)."
+                )
+            if self.s3_access_key == DEFAULT_S3_ACCESS_KEY:
+                raise ValueError("S3_ACCESS_KEY must be set to a non-default value!")
+            if self.s3_secret_key == DEFAULT_S3_SECRET_KEY:
+                raise ValueError("S3_SECRET_KEY must be set to a non-default value!")
+            if any(origin in {"*", "http://localhost:3000"} for origin in self.cors_origins):
+                raise ValueError("CORS_ORIGINS must be restricted in production!")
         return self
 
 
 @lru_cache
 def get_settings() -> Settings:
     """Get cached settings instance."""
+    _load_secret_file_env_vars()
     return Settings()

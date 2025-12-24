@@ -1,6 +1,6 @@
 """Unit tests for health check endpoints.
 
-Tests database and Redis health checks.
+Tests database, Redis, and storage health checks.
 """
 
 import os
@@ -48,18 +48,22 @@ class TestReadinessEndpoint:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock()
 
-        # Mock Redis
-        with patch("redis.asyncio.from_url") as mock_redis_from_url:
+        # Mock Redis and S3
+        with patch("redis.asyncio.from_url") as mock_redis_from_url, patch(
+            "boto3.client"
+        ) as mock_boto_client:
             mock_redis = AsyncMock()
             mock_redis.ping = AsyncMock()
             mock_redis.close = AsyncMock()
             mock_redis_from_url.return_value = mock_redis
+            mock_boto_client.return_value = MagicMock()
 
             response = await readiness_check(session=mock_session)
 
         assert response.ready is True
         assert response.checks["database"] is True
         assert response.checks["redis"] is True
+        assert response.checks["storage"] is True
 
     @pytest.mark.asyncio
     async def test_ready_database_down(self):
@@ -70,18 +74,22 @@ class TestReadinessEndpoint:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(side_effect=Exception("Connection refused"))
 
-        # Mock Redis working
-        with patch("redis.asyncio.from_url") as mock_redis_from_url:
+        # Mock Redis and S3 working
+        with patch("redis.asyncio.from_url") as mock_redis_from_url, patch(
+            "boto3.client"
+        ) as mock_boto_client:
             mock_redis = AsyncMock()
             mock_redis.ping = AsyncMock()
             mock_redis.close = AsyncMock()
             mock_redis_from_url.return_value = mock_redis
+            mock_boto_client.return_value = MagicMock()
 
             response = await readiness_check(session=mock_session)
 
         assert response.ready is False
         assert response.checks["database"] is False
         assert response.checks["redis"] is True
+        assert response.checks["storage"] is True
 
     @pytest.mark.asyncio
     async def test_ready_redis_down(self):
@@ -92,17 +100,21 @@ class TestReadinessEndpoint:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock()
 
-        # Mock Redis failing
-        with patch("redis.asyncio.from_url") as mock_redis_from_url:
+        # Mock Redis failing, S3 working
+        with patch("redis.asyncio.from_url") as mock_redis_from_url, patch(
+            "boto3.client"
+        ) as mock_boto_client:
             mock_redis = AsyncMock()
             mock_redis.ping = AsyncMock(side_effect=Exception("Connection refused"))
             mock_redis_from_url.return_value = mock_redis
+            mock_boto_client.return_value = MagicMock()
 
             response = await readiness_check(session=mock_session)
 
         assert response.ready is False
         assert response.checks["database"] is True
         assert response.checks["redis"] is False
+        assert response.checks["storage"] is True
 
     @pytest.mark.asyncio
     async def test_ready_all_services_down(self):
@@ -113,17 +125,23 @@ class TestReadinessEndpoint:
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(side_effect=Exception("DB down"))
 
-        # Mock Redis failing
-        with patch("redis.asyncio.from_url") as mock_redis_from_url:
+        # Mock Redis and S3 failing
+        with patch("redis.asyncio.from_url") as mock_redis_from_url, patch(
+            "boto3.client"
+        ) as mock_boto_client:
             mock_redis = AsyncMock()
             mock_redis.ping = AsyncMock(side_effect=Exception("Redis down"))
             mock_redis_from_url.return_value = mock_redis
+            mock_boto_client.return_value = MagicMock(
+                list_objects_v2=MagicMock(side_effect=Exception("S3 down"))
+            )
 
             response = await readiness_check(session=mock_session)
 
         assert response.ready is False
         assert response.checks["database"] is False
         assert response.checks["redis"] is False
+        assert response.checks["storage"] is False
 
 
 class TestHealthResponseModels:

@@ -53,6 +53,7 @@ dependencies = [
 
     # Rate Limiting
     "slowapi>=0.1.9",
+    "prometheus-client>=0.20.0",
 
     # MCP (Model Context Protocol)
     "mcp>=1.0.0",

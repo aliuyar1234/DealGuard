@@ -2,10 +2,10 @@
 
 import asyncio
 import time
+from datetime import datetime, timezone
 from typing import Sequence
 from uuid import UUID
 
-from dealguard.infrastructure.ai.client import AnthropicClient
 from dealguard.infrastructure.ai.prompts.contract_analysis_v1 import (
     ContractAnalysisPromptV1,
 )
@@ -16,13 +16,14 @@ from dealguard.infrastructure.database.models.contract import (
     ContractFinding,
     ContractType,
 )
-from dealguard.infrastructure.database.repositories.contract import (
-    ContractAnalysisRepository,
-    ContractRepository,
+from dealguard.domain.contracts.ports import (
+    AIClientPort,
+    ContractAnalysisRepositoryPort,
+    ContractRepositoryPort,
+    DocumentExtractorPort,
+    ExtractedDocument,
+    StoragePort,
 )
-from dealguard.infrastructure.document.extractor import DocumentExtractor
-from dealguard.infrastructure.storage.s3 import S3Storage
-from dealguard.shared.context import get_tenant_context
 from dealguard.shared.exceptions import AnalysisFailedError, NotFoundError, QuotaExceededError
 from dealguard.shared.logging import get_logger
 
@@ -38,11 +39,11 @@ class ContractAnalysisService:
 
     def __init__(
         self,
-        contract_repo: ContractRepository,
-        analysis_repo: ContractAnalysisRepository,
-        ai_client: AnthropicClient,
-        storage: S3Storage,
-        extractor: DocumentExtractor,
+        contract_repo: ContractRepositoryPort,
+        analysis_repo: ContractAnalysisRepositoryPort,
+        ai_client: AIClientPort,
+        storage: StoragePort,
+        extractor: DocumentExtractorPort,
     ) -> None:
         self.contract_repo = contract_repo
         self.analysis_repo = analysis_repo
@@ -56,6 +57,9 @@ class ContractAnalysisService:
         filename: str,
         mime_type: str,
         contract_type: ContractType | None = None,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
     ) -> Contract:
         """Upload a contract for analysis.
 
@@ -74,15 +78,8 @@ class ContractAnalysisService:
         Returns:
             Created Contract with PENDING status
         """
-        ctx = get_tenant_context()
-
-        # TODO: Check quota
-        # await self._check_quota(ctx.organization_id)
-
         # Extract text and metadata (run in thread to avoid blocking event loop)
-        extracted = await asyncio.to_thread(
-            self.extractor.extract, content, filename, mime_type
-        )
+        extracted = await self._extract_document(content, filename, mime_type)
 
         # Check for duplicate
         existing = await self.contract_repo.get_by_file_hash(extracted.file_hash)
@@ -95,17 +92,19 @@ class ContractAnalysisService:
             # Return existing contract instead of creating duplicate
             return existing
 
+        await self._check_quota(organization_id)
+
         # Upload to S3
         file_path, _ = await self.storage.upload(
             content=content,
-            organization_id=ctx.organization_id,
+            organization_id=organization_id,
             filename=filename,
             mime_type=mime_type,
         )
 
         # Create contract record (encryption handled automatically by model)
         contract = Contract(
-            created_by=ctx.user_id,
+            created_by=user_id,
             filename=filename,
             file_path=file_path,
             file_hash=extracted.file_hash,
@@ -128,6 +127,31 @@ class ContractAnalysisService:
 
         return contract
 
+    async def _check_quota(self, organization_id: UUID) -> None:
+        """Ensure the organization has not exceeded its monthly contract limit."""
+        limit = await self.contract_repo.get_contract_limit(organization_id)
+        if limit is None:
+            logger.warning(
+                "quota_check_skipped_missing_org",
+                organization_id=str(organization_id),
+            )
+            return
+        if limit >= 999999:
+            return
+
+        now = datetime.now(timezone.utc)
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if start.month == 12:
+            end = start.replace(year=start.year + 1, month=1)
+        else:
+            end = start.replace(month=start.month + 1)
+
+        used = await self.contract_repo.count_created_between(
+            start, end, include_deleted=True
+        )
+        if used >= limit:
+            raise QuotaExceededError("Vertragsanalysen", limit)
+
     async def perform_analysis(self, contract_id: UUID) -> ContractAnalysis:
         """Perform AI analysis on a contract.
 
@@ -139,85 +163,32 @@ class ContractAnalysisService:
         Returns:
             ContractAnalysis with results
         """
-        start_time = time.monotonic()
-
-        # Get contract
-        contract = await self.contract_repo.get_by_id(contract_id)
-        if not contract:
-            raise NotFoundError("Vertrag", str(contract_id))
-
-        # Update status to processing
+        contract = await self._load_contract(contract_id)
         await self.contract_repo.update_status(contract, AnalysisStatus.PROCESSING)
 
+        start_time = time.monotonic()
         try:
-            # Run AI analysis
-            prompt = ContractAnalysisPromptV1()
-            # contract_type can be an enum or a string depending on how it was stored
-            contract_type_str = None
-            if contract.contract_type:
-                contract_type_str = contract.contract_type.value if hasattr(contract.contract_type, 'value') else contract.contract_type
-
-            # Get decrypted contract text (handled by hybrid property)
-            ai_response = await self.ai_client.analyze_contract(
-                contract_text=contract.contract_text,  # Auto-decrypted
-                contract_type=contract_type_str,
-                resource_id=contract_id,
+            result, ai_response, prompt_version = await self._run_ai_analysis(
+                contract, contract_id
             )
-
-            # Parse response
-            result = prompt.parse_response(ai_response.content)
-
-            # Update contract type if detected
-            if result.contract_type_detected and not contract.contract_type:
-                contract.contract_type = self._map_contract_type(result.contract_type_detected)
-
-            # Create analysis record
-            processing_time_ms = int((time.monotonic() - start_time) * 1000)
-
-            analysis = ContractAnalysis(
-                contract_id=contract_id,
-                risk_score=result.risk_score,
-                risk_level=result.risk_level,
-                summary=result.summary,
-                recommendations=result.recommendations,
-                processing_time_ms=processing_time_ms,
-                ai_model_version=ai_response.model,
-                prompt_version=prompt.version.version,
-                input_tokens=ai_response.input_tokens,
-                output_tokens=ai_response.output_tokens,
-                cost_cents=ai_response.cost_cents,
+            analysis, findings = self._build_analysis(
+                contract_id,
+                result,
+                ai_response,
+                prompt_version,
+                start_time,
             )
-
-            # Create findings
-            findings = [
-                ContractFinding(
-                    category=f.category,
-                    severity=f.severity,
-                    title=f.title,
-                    description=f.description,
-                    original_clause_text=f.original_clause_text,
-                    clause_location=f.clause_location,
-                    suggested_change=f.suggested_change,
-                    market_comparison=f.market_comparison,
-                )
-                for f in result.findings
-            ]
-
-            # Save analysis with findings and update contract status atomically
-            async with self.contract_repo.session.begin_nested():
-                analysis = await self.analysis_repo.create_with_findings(analysis, findings)
-                await self.contract_repo.update_status(contract, AnalysisStatus.COMPLETED)
+            await self._persist_analysis(contract, analysis, findings)
 
             logger.info(
                 "contract_analysis_completed",
                 contract_id=str(contract_id),
                 risk_score=result.risk_score,
                 findings_count=len(findings),
-                processing_time_ms=processing_time_ms,
+                processing_time_ms=analysis.processing_time_ms,
             )
 
             return analysis
-
         except Exception as e:
             logger.exception(
                 "contract_analysis_failed",
@@ -256,6 +227,93 @@ class ContractAnalysisService:
         await self.contract_repo.soft_delete(contract)
 
         logger.info("contract_deleted", contract_id=str(contract_id))
+
+    async def _extract_document(
+        self,
+        content: bytes,
+        filename: str,
+        mime_type: str,
+    ) -> ExtractedDocument:
+        return await asyncio.to_thread(
+            self.extractor.extract, content, filename, mime_type
+        )
+
+    async def _load_contract(self, contract_id: UUID) -> Contract:
+        contract = await self.contract_repo.get_by_id(contract_id)
+        if not contract:
+            raise NotFoundError("Vertrag", str(contract_id))
+        return contract
+
+    async def _run_ai_analysis(
+        self,
+        contract: Contract,
+        contract_id: UUID,
+    ):
+        prompt = ContractAnalysisPromptV1()
+        contract_type_str = self._resolve_contract_type(contract)
+
+        ai_response = await self.ai_client.analyze_contract(
+            contract_text=contract.contract_text,
+            contract_type=contract_type_str,
+            resource_id=contract_id,
+        )
+        result = prompt.parse_response(ai_response.content)
+        if result.contract_type_detected and not contract.contract_type:
+            contract.contract_type = self._map_contract_type(result.contract_type_detected)
+        return result, ai_response, prompt.version.version
+
+    def _resolve_contract_type(self, contract: Contract) -> str | None:
+        if not contract.contract_type:
+            return None
+        return contract.contract_type.value if hasattr(contract.contract_type, "value") else contract.contract_type
+
+    def _build_analysis(
+        self,
+        contract_id: UUID,
+        result,
+        ai_response,
+        prompt_version: str,
+        start_time: float,
+    ) -> tuple[ContractAnalysis, list[ContractFinding]]:
+        processing_time_ms = int((time.monotonic() - start_time) * 1000)
+        analysis = ContractAnalysis(
+            contract_id=contract_id,
+            risk_score=result.risk_score,
+            risk_level=result.risk_level,
+            summary=result.summary,
+            recommendations=result.recommendations,
+            processing_time_ms=processing_time_ms,
+            ai_model_version=ai_response.model,
+            prompt_version=prompt_version,
+            input_tokens=ai_response.input_tokens,
+            output_tokens=ai_response.output_tokens,
+            cost_cents=ai_response.cost_cents,
+        )
+
+        findings = [
+            ContractFinding(
+                category=f.category,
+                severity=f.severity,
+                title=f.title,
+                description=f.description,
+                original_clause_text=f.original_clause_text,
+                clause_location=f.clause_location,
+                suggested_change=f.suggested_change,
+                market_comparison=f.market_comparison,
+            )
+            for f in result.findings
+        ]
+        return analysis, findings
+
+    async def _persist_analysis(
+        self,
+        contract: Contract,
+        analysis: ContractAnalysis,
+        findings: list[ContractFinding],
+    ) -> None:
+        async with self.contract_repo.begin_nested():
+            await self.analysis_repo.create_with_findings(analysis, findings)
+            await self.contract_repo.update_status(contract, AnalysisStatus.COMPLETED)
 
     def _map_contract_type(self, detected: str) -> ContractType:
         """Map AI-detected contract type to enum."""

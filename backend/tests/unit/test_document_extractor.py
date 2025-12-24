@@ -189,7 +189,11 @@ class TestDocumentExtractor:
         expected_hash = hashlib.sha256(content).hexdigest()
 
         with patch.object(extractor, "_extract_pdf") as mock_pdf:
-            mock_pdf.return_value = ("Extracted text content that is long enough", 1, [])
+            mock_pdf.return_value = (
+                "Extracted text content that is long enough for validation and hashing.",
+                1,
+                [],
+            )
 
             result = extractor.extract(
                 content=content,
@@ -204,7 +208,11 @@ class TestDocumentExtractor:
         content = b"pdf content"
 
         with patch.object(extractor, "_extract_pdf") as mock_pdf:
-            mock_pdf.return_value = ("Long enough text content for validation tests", 3, [])
+            mock_pdf.return_value = (
+                "Long enough text content for validation tests, exceeding the minimum length.",
+                3,
+                [],
+            )
 
             result = extractor.extract(
                 content=content,
@@ -221,7 +229,11 @@ class TestDocumentExtractor:
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
         with patch.object(extractor, "_extract_docx") as mock_docx:
-            mock_docx.return_value = ("Long enough text content for validation tests", 2, [])
+            mock_docx.return_value = (
+                "Long enough text content for validation tests, exceeding the minimum length.",
+                2,
+                [],
+            )
 
             result = extractor.extract(
                 content=content,
@@ -446,10 +458,15 @@ class TestOCRFallback:
         """Test OCR gracefully handles missing pytesseract."""
         mock_page = MagicMock()
 
-        with patch.dict("sys.modules", {"pytesseract": None}):
-            # Force ImportError
-            with patch("builtins.__import__", side_effect=ImportError):
-                result = extractor._ocr_page(mock_page)
+        original_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "pytesseract":
+                raise ImportError("No module named pytesseract")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            result = extractor._ocr_page(mock_page)
 
         # Should return empty string, not raise
         assert result == ""

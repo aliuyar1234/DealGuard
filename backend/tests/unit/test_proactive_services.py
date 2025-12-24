@@ -2,7 +2,7 @@
 Unit tests for Proactive Monitoring services.
 
 Tests cover:
-- DeadlineService: Extraction, monitoring, alert generation
+- DeadlineMonitoringService: Monitoring and alert generation
 - AlertService: Lifecycle management
 - RiskRadarService: Combined scoring
 """
@@ -22,6 +22,21 @@ from dealguard.infrastructure.database.models.proactive import (
     DeadlineType,
     ProactiveAlert,
 )
+from dealguard.shared.context import TenantContext, clear_tenant_context, set_tenant_context
+
+
+@pytest.fixture(autouse=True)
+def tenant_context():
+    """Ensure tenant context is available for service calls."""
+    ctx = TenantContext(
+        organization_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        user_email="test@example.com",
+        user_role="admin",
+    )
+    set_tenant_context(ctx)
+    yield ctx
+    clear_tenant_context()
 
 
 class TestDeadlineType:
@@ -30,12 +45,14 @@ class TestDeadlineType:
     def test_all_deadline_types_exist(self):
         """Test all expected deadline types exist."""
         expected_types = [
-            "termination",
-            "renewal",
-            "payment",
-            "option",
-            "start",
-            "end",
+            "termination_notice",
+            "auto_renewal",
+            "payment_due",
+            "warranty_end",
+            "contract_end",
+            "review_date",
+            "price_adjustment",
+            "notice_period",
             "other",
         ]
         actual_types = [t.value for t in DeadlineType]
@@ -45,9 +62,9 @@ class TestDeadlineType:
 
     def test_deadline_type_values(self):
         """Test specific deadline type values."""
-        assert DeadlineType.TERMINATION.value == "termination"
-        assert DeadlineType.RENEWAL.value == "renewal"
-        assert DeadlineType.PAYMENT.value == "payment"
+        assert DeadlineType.TERMINATION_NOTICE.value == "termination_notice"
+        assert DeadlineType.AUTO_RENEWAL.value == "auto_renewal"
+        assert DeadlineType.PAYMENT_DUE.value == "payment_due"
 
 
 class TestDeadlineStatus:
@@ -68,7 +85,9 @@ class TestAlertSeverity:
     def test_severity_levels(self):
         """Test severity levels exist."""
         assert AlertSeverity.INFO.value == "info"
-        assert AlertSeverity.WARNING.value == "warning"
+        assert AlertSeverity.LOW.value == "low"
+        assert AlertSeverity.MEDIUM.value == "medium"
+        assert AlertSeverity.HIGH.value == "high"
         assert AlertSeverity.CRITICAL.value == "critical"
 
 
@@ -93,14 +112,14 @@ class TestContractDeadlineModel:
             id=uuid.uuid4(),
             organization_id=uuid.uuid4(),
             contract_id=uuid.uuid4(),
-            deadline_type=DeadlineType.TERMINATION,
+            deadline_type=DeadlineType.TERMINATION_NOTICE,
             deadline_date=date.today() + timedelta(days=30),
             reminder_days_before=14,
             confidence=0.95,
             status=DeadlineStatus.ACTIVE,
         )
 
-        assert deadline.deadline_type == DeadlineType.TERMINATION
+        assert deadline.deadline_type == DeadlineType.TERMINATION_NOTICE
         assert deadline.confidence == 0.95
         assert deadline.status == DeadlineStatus.ACTIVE
 
@@ -110,7 +129,7 @@ class TestContractDeadlineModel:
             id=uuid.uuid4(),
             organization_id=uuid.uuid4(),
             contract_id=uuid.uuid4(),
-            deadline_type=DeadlineType.TERMINATION,
+            deadline_type=DeadlineType.TERMINATION_NOTICE,
             deadline_date=date.today() + timedelta(days=30),
             source_clause="Die Kündigungsfrist beträgt 3 Monate zum Quartalsende.",
             confidence=0.92,
@@ -128,15 +147,15 @@ class TestProactiveAlertModel:
         alert = ProactiveAlert(
             id=uuid.uuid4(),
             organization_id=uuid.uuid4(),
-            source_type=AlertSourceType.CONTRACT,
+            source_type=AlertSourceType.DEADLINE,
             alert_type=AlertType.DEADLINE_APPROACHING,
-            severity=AlertSeverity.WARNING,
+            severity=AlertSeverity.HIGH,
             title="Kündigungsfrist in 14 Tagen",
             description="Der Mietvertrag muss bis zum 15.01.2025 gekündigt werden.",
             status=AlertStatus.NEW,
         )
 
-        assert alert.severity == AlertSeverity.WARNING
+        assert alert.severity == AlertSeverity.HIGH
         assert alert.status == AlertStatus.NEW
 
     def test_alert_with_recommendation(self):
@@ -144,7 +163,7 @@ class TestProactiveAlertModel:
         alert = ProactiveAlert(
             id=uuid.uuid4(),
             organization_id=uuid.uuid4(),
-            source_type=AlertSourceType.CONTRACT,
+            source_type=AlertSourceType.DEADLINE,
             alert_type=AlertType.DEADLINE_APPROACHING,
             severity=AlertSeverity.CRITICAL,
             title="Frist überschritten",
@@ -161,8 +180,8 @@ class TestProactiveAlertModel:
         assert len(alert.recommended_actions) == 2
 
 
-class TestDeadlineService:
-    """Tests for DeadlineService."""
+class TestDeadlineMonitoringService:
+    """Tests for DeadlineMonitoringService."""
 
     @pytest.fixture
     def mock_db(self):
@@ -170,10 +189,16 @@ class TestDeadlineService:
         return AsyncMock()
 
     @pytest.fixture
-    def deadline_service(self, mock_db):
-        """Create DeadlineService instance."""
-        from dealguard.domain.proactive.deadline_service import DeadlineService
-        return DeadlineService(mock_db)
+    def deadline_service(self, mock_db, tenant_context):
+        """Create DeadlineMonitoringService instance."""
+        from dealguard.domain.proactive.deadline_service import (
+            DeadlineMonitoringService,
+        )
+        return DeadlineMonitoringService(
+            mock_db,
+            organization_id=tenant_context.organization_id,
+            user_id=tenant_context.user_id,
+        )
 
     @pytest.mark.asyncio
     async def test_get_upcoming_deadlines(self, deadline_service, mock_db):
@@ -182,7 +207,7 @@ class TestDeadlineService:
             MagicMock(
                 id=uuid.uuid4(),
                 deadline_date=date.today() + timedelta(days=7),
-                deadline_type=DeadlineType.TERMINATION,
+                deadline_type=DeadlineType.TERMINATION_NOTICE,
                 status=DeadlineStatus.ACTIVE,
             )
         ]
@@ -201,7 +226,7 @@ class TestDeadlineService:
             MagicMock(
                 id=uuid.uuid4(),
                 deadline_date=date.today() - timedelta(days=3),
-                deadline_type=DeadlineType.PAYMENT,
+                deadline_type=DeadlineType.PAYMENT_DUE,
                 status=DeadlineStatus.ACTIVE,
             )
         ]
@@ -221,7 +246,9 @@ class TestDeadlineService:
             id=deadline_id,
             status=DeadlineStatus.ACTIVE,
         )
-        mock_db.get.return_value = deadline
+        mock_db.execute.return_value = MagicMock(
+            scalar_one_or_none=MagicMock(return_value=deadline)
+        )
 
         result = await deadline_service.mark_deadline_handled(
             deadline_id=deadline_id,
@@ -239,7 +266,9 @@ class TestDeadlineService:
             id=deadline_id,
             status=DeadlineStatus.ACTIVE,
         )
-        mock_db.get.return_value = deadline
+        mock_db.execute.return_value = MagicMock(
+            scalar_one_or_none=MagicMock(return_value=deadline)
+        )
 
         result = await deadline_service.dismiss_deadline(
             deadline_id=deadline_id,
@@ -257,7 +286,9 @@ class TestDeadlineService:
             deadline_date=date.today() + timedelta(days=30),
             is_verified=False,
         )
-        mock_db.get.return_value = deadline
+        mock_db.execute.return_value = MagicMock(
+            scalar_one_or_none=MagicMock(return_value=deadline)
+        )
 
         correct_date = date.today() + timedelta(days=45)
         result = await deadline_service.verify_deadline(
@@ -278,10 +309,14 @@ class TestAlertService:
         return AsyncMock()
 
     @pytest.fixture
-    def alert_service(self, mock_db):
+    def alert_service(self, mock_db, tenant_context):
         """Create AlertService instance."""
         from dealguard.domain.proactive.alert_service import AlertService
-        return AlertService(mock_db)
+        return AlertService(
+            mock_db,
+            organization_id=tenant_context.organization_id,
+            user_id=tenant_context.user_id,
+        )
 
     @pytest.mark.asyncio
     async def test_list_alerts_with_filter(self, alert_service, mock_db):
@@ -312,7 +347,9 @@ class TestAlertService:
         """Test marking alert as seen."""
         alert_id = uuid.uuid4()
         alert = MagicMock(id=alert_id, status=AlertStatus.NEW)
-        mock_db.get.return_value = alert
+        mock_db.execute.return_value = MagicMock(
+            scalar_one_or_none=MagicMock(return_value=alert)
+        )
 
         result = await alert_service.mark_seen(alert_id)
 
@@ -323,7 +360,9 @@ class TestAlertService:
         """Test resolving alert."""
         alert_id = uuid.uuid4()
         alert = MagicMock(id=alert_id, status=AlertStatus.IN_PROGRESS)
-        mock_db.get.return_value = alert
+        mock_db.execute.return_value = MagicMock(
+            scalar_one_or_none=MagicMock(return_value=alert)
+        )
 
         result = await alert_service.resolve(
             alert_id=alert_id,
@@ -342,7 +381,9 @@ class TestAlertService:
             status=AlertStatus.NEW,
             snoozed_until=None,
         )
-        mock_db.get.return_value = alert
+        mock_db.execute.return_value = MagicMock(
+            scalar_one_or_none=MagicMock(return_value=alert)
+        )
 
         result = await alert_service.snooze(alert_id=alert_id, days=7)
 
@@ -354,7 +395,9 @@ class TestAlertService:
         """Test dismissing alert."""
         alert_id = uuid.uuid4()
         alert = MagicMock(id=alert_id, status=AlertStatus.NEW)
-        mock_db.get.return_value = alert
+        mock_db.execute.return_value = MagicMock(
+            scalar_one_or_none=MagicMock(return_value=alert)
+        )
 
         result = await alert_service.dismiss(
             alert_id=alert_id,
@@ -367,7 +410,7 @@ class TestAlertService:
     async def test_count_new_alerts(self, alert_service, mock_db):
         """Test counting new alerts."""
         mock_db.execute.return_value = MagicMock(
-            scalar_one=MagicMock(return_value=5)
+            scalar=MagicMock(return_value=5)
         )
 
         count = await alert_service.count_new_alerts()
@@ -384,10 +427,13 @@ class TestRiskRadarService:
         return AsyncMock()
 
     @pytest.fixture
-    def risk_radar_service(self, mock_db):
+    def risk_radar_service(self, mock_db, tenant_context):
         """Create RiskRadarService instance."""
         from dealguard.domain.proactive.risk_radar_service import RiskRadarService
-        return RiskRadarService(mock_db)
+        return RiskRadarService(
+            mock_db,
+            organization_id=tenant_context.organization_id,
+        )
 
     @pytest.mark.asyncio
     async def test_get_risk_radar(self, risk_radar_service, mock_db):
@@ -396,6 +442,7 @@ class TestRiskRadarService:
         mock_db.execute.return_value = MagicMock(
             scalar_one_or_none=MagicMock(return_value=None),
             scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))),
+            scalar=MagicMock(return_value=0),
         )
 
         result = await risk_radar_service.get_risk_radar()
@@ -433,17 +480,39 @@ class TestDeadlineStats:
         return AsyncMock()
 
     @pytest.fixture
-    def deadline_service(self, mock_db):
-        """Create DeadlineService instance."""
-        from dealguard.domain.proactive.deadline_service import DeadlineService
-        return DeadlineService(mock_db)
+    def deadline_service(self, mock_db, tenant_context):
+        """Create DeadlineMonitoringService instance."""
+        from dealguard.domain.proactive.deadline_service import (
+            DeadlineMonitoringService,
+        )
+        return DeadlineMonitoringService(
+            mock_db,
+            organization_id=tenant_context.organization_id,
+            user_id=tenant_context.user_id,
+        )
 
     @pytest.mark.asyncio
     async def test_get_deadline_stats(self, deadline_service, mock_db):
         """Test getting deadline statistics."""
-        # Mock stats query
+        today = date.today()
+        deadlines = [
+            MagicMock(deadline_date=today - timedelta(days=1)),
+            MagicMock(deadline_date=today - timedelta(days=3)),
+            MagicMock(deadline_date=today + timedelta(days=1)),
+            MagicMock(deadline_date=today + timedelta(days=3)),
+            MagicMock(deadline_date=today + timedelta(days=7)),
+            MagicMock(deadline_date=today + timedelta(days=10)),
+            MagicMock(deadline_date=today + timedelta(days=25)),
+            MagicMock(deadline_date=today + timedelta(days=40)),
+            MagicMock(deadline_date=today + timedelta(days=60)),
+            MagicMock(deadline_date=today + timedelta(days=90)),
+        ]
         mock_db.execute.return_value = MagicMock(
-            one=MagicMock(return_value=(10, 8, 2, 3, 5))  # total, active, overdue, 7days, 30days
+            scalars=MagicMock(
+                return_value=MagicMock(
+                    all=MagicMock(return_value=deadlines)
+                )
+            )
         )
 
         stats = await deadline_service.get_deadline_stats()
@@ -462,17 +531,58 @@ class TestAlertStats:
         return AsyncMock()
 
     @pytest.fixture
-    def alert_service(self, mock_db):
+    def alert_service(self, mock_db, tenant_context):
         """Create AlertService instance."""
         from dealguard.domain.proactive.alert_service import AlertService
-        return AlertService(mock_db)
+        return AlertService(
+            mock_db,
+            organization_id=tenant_context.organization_id,
+            user_id=tenant_context.user_id,
+        )
 
     @pytest.mark.asyncio
     async def test_get_alert_stats(self, alert_service, mock_db):
         """Test getting alert statistics."""
-        # Mock stats query
+        alerts = [
+            *[
+                MagicMock(
+                    status=AlertStatus.NEW,
+                    severity=AlertSeverity.INFO,
+                    alert_type=AlertType.DEADLINE_APPROACHING,
+                )
+                for _ in range(5)
+            ],
+            *[
+                MagicMock(
+                    status=AlertStatus.SEEN,
+                    severity=AlertSeverity.LOW,
+                    alert_type=AlertType.DEADLINE_APPROACHING,
+                )
+                for _ in range(8)
+            ],
+            *[
+                MagicMock(
+                    status=AlertStatus.IN_PROGRESS,
+                    severity=AlertSeverity.MEDIUM,
+                    alert_type=AlertType.DEADLINE_APPROACHING,
+                )
+                for _ in range(3)
+            ],
+            *[
+                MagicMock(
+                    status=AlertStatus.RESOLVED,
+                    severity=AlertSeverity.HIGH,
+                    alert_type=AlertType.DEADLINE_APPROACHING,
+                )
+                for _ in range(4)
+            ],
+        ]
         mock_db.execute.return_value = MagicMock(
-            one=MagicMock(return_value=(20, 5, 8, 3, 4))  # total, new, seen, in_progress, resolved
+            scalars=MagicMock(
+                return_value=MagicMock(
+                    all=MagicMock(return_value=alerts)
+                )
+            )
         )
 
         stats = await alert_service.get_stats()
