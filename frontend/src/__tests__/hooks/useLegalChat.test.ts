@@ -28,6 +28,16 @@ jest.mock('@/hooks/useAuth', () => ({
 }));
 
 describe('useLegalChat Hook', () => {
+  let consoleErrorSpy: jest.SpyInstance;
+
+  beforeAll(() => {
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterAll(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetLegalConversations.mockResolvedValue({ items: [] });

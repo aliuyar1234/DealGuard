@@ -40,6 +40,8 @@ describe('useAuth Hook', () => {
   });
 
   it('initializes with loading state', () => {
+    mockGetSession.mockReturnValueOnce(new Promise(() => undefined));
+
     const { result } = renderHook(() => useAuth());
 
     expect(result.current.loading).toBe(true);
@@ -110,12 +112,14 @@ describe('useAuth Hook', () => {
   });
 
   it('subscribes to auth state changes', () => {
+    mockGetSession.mockReturnValueOnce(new Promise(() => undefined));
     renderHook(() => useAuth());
 
     expect(mockOnAuthStateChange).toHaveBeenCalled();
   });
 
   it('unsubscribes on unmount', () => {
+    mockGetSession.mockReturnValueOnce(new Promise(() => undefined));
     const { unmount } = renderHook(() => useAuth());
 
     unmount();

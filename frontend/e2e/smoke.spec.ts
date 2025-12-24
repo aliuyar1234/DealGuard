@@ -1,57 +1,40 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 /**
  * Smoke tests to verify the application is working.
- * These tests check basic functionality without deep business logic.
+ *
+ * These tests avoid waiting for `networkidle` because Next.js dev-mode/HMR can
+ * keep connections open and cause flaky timeouts.
  */
 
 test.describe('Smoke Tests', () => {
   test('homepage loads and shows navigation', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
 
-    // Should have the DealGuard branding
-    await expect(page.locator('text=DealGuard')).toBeVisible();
-
-    // Should show main navigation items
-    await expect(page.locator('text=Dashboard')).toBeVisible();
-    await expect(page.locator('text=Verträge')).toBeVisible();
-    await expect(page.locator('text=Partner')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'DealGuard' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
+    await expect(page.locator('a[href="/vertraege"]')).toBeVisible();
+    await expect(page.locator('a[href="/partner"]')).toBeVisible();
   });
 
   test('dashboard shows key sections', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
-
-    // In dev mode, should auto-login and show dashboard content
-    // Check for dashboard elements
-    const pageContent = await page.content();
-
-    // Should have some dashboard content (adjust based on actual UI)
-    expect(pageContent).toBeTruthy();
+    await expect(page.getByRole('heading', { level: 1, name: /Dashboard/i })).toBeVisible();
+    expect(await page.content()).toBeTruthy();
   });
 
-  test('navigation to Verträge works', async ({ page }) => {
+  test('navigation to contracts works', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.locator('a[href="/vertraege"]').click();
 
-    // Click on Verträge navigation
-    await page.click('text=Verträge');
-    await page.waitForLoadState('networkidle');
-
-    // Should be on the contracts page
     await expect(page).toHaveURL(/vertraege/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(/Vertr/i);
   });
 
-  test('navigation to Partner works', async ({ page }) => {
+  test('navigation to partners works', async ({ page }) => {
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.locator('a[href="/partner"]').click();
 
-    // Click on Partner navigation
-    await page.click('text=Partner');
-    await page.waitForLoadState('networkidle');
-
-    // Should be on the partners page
     await expect(page).toHaveURL(/partner/);
   });
 });
