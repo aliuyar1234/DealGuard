@@ -75,6 +75,7 @@ docker-compose.override.yml
 *.pem
 *.key
 credentials.json
+secrets/
 
 # Uploads (local dev)
 uploads/

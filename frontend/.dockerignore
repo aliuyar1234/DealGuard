@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+coverage/
+playwright-report/
+.env
+.env.*
+.git/
+.gitignore
+*.log
+dist/
+build/

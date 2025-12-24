@@ -3,7 +3,8 @@
 # ===========================================
 
 # Base stage
-FROM node:20-alpine AS base
+ARG NODE_IMAGE=node:20.18.1-alpine
+FROM ${NODE_IMAGE} AS base
 
 WORKDIR /app
 
@@ -14,7 +15,7 @@ FROM base AS development
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm ci
 
 # Copy source
 COPY . .
@@ -64,5 +65,12 @@ EXPOSE 3000
 
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+
+# Stop signal for graceful shutdown
+STOPSIGNAL SIGTERM
 
 CMD ["node", "server.js"]

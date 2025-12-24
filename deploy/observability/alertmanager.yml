@@ -1,0 +1,11 @@
+route:
+  receiver: alert-logger
+  group_by: ["alertname", "job"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: alert-logger
+    webhook_configs:
+      - url: http://alert-logger:9099/alerts
