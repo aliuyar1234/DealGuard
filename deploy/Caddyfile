@@ -11,6 +11,9 @@
   }
 
   @api path /api/* /docs* /openapi.json /redoc* /health /ready
+  request_body @api {
+    max_size 55MB
+  }
   reverse_proxy @api backend:8000
   reverse_proxy frontend:3000
 

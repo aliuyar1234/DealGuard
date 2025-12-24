@@ -23,6 +23,7 @@ wheels/
 
 # Virtual environments
 .venv/
+.venv_audit/
 venv/
 ENV/
 env/
@@ -54,6 +55,8 @@ htmlcov/
 .nox/
 .pytest_cache/
 .hypothesis/
+frontend/playwright-report/
+frontend/test-results/
 
 # Build outputs
 .next/
@@ -84,6 +87,9 @@ tmp/
 # Claude Code
 .claude/
 CLAUDE.md
+
+# Project specs (local)
+DEALGUARD_SPEC.md
 
 # Code Review Reports (internal)
 *_REVIEW_REPORT.md
