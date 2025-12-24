@@ -27,10 +27,7 @@ describe('useAsync Hook', () => {
     it('sets loading to true during execution', async () => {
       const { result } = renderHook(() => useAsync<string>());
 
-      let loadingDuringExecution = false;
-
       const asyncFn = async () => {
-        loadingDuringExecution = result.current.loading;
         return 'result';
       };
 

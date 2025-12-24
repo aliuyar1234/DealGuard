@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/Input';
 import {
   sendChatMessage,
   type ChatMessage,
-  type ChatResponse,
   type ToolCall,
 } from '@/lib/api/client';
 import { Send, Bot, User, Loader2, Wrench, AlertTriangle } from 'lucide-react';

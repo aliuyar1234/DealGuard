@@ -1,4 +1,4 @@
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { useLegalChat } from '@/hooks/useLegalChat';
 
 // Mock the API client functions

@@ -46,7 +46,7 @@ export default function EinstellungenPage() {
         const data = await getSettings(token);
         setSettings(data);
         setAiProvider(data.api_keys.ai_provider);
-      } catch (err) {
+      } catch {
         setError('Fehler beim Laden der Einstellungen');
       } finally {
         setLoading(false);

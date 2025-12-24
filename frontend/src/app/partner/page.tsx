@@ -1,7 +1,7 @@
 'use client';
 
 import { Shell } from '@/components/layout/Shell';
-import { Badge, Button, Card, CardContent } from '@/components/ui';
+import { Badge, type BadgeProps, Button, Card, CardContent } from '@/components/ui';
 import { useAuth } from '@/hooks/useAuth';
 import { usePartners } from '@/hooks/usePartners';
 import { formatDate } from '@/lib/utils';
@@ -64,7 +64,7 @@ export default function PartnersPage() {
       p.handelsregister_id?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const getRiskBadgeVariant = (level: string) => {
+  const getRiskBadgeVariant = (level: string): BadgeProps['variant'] => {
     switch (level) {
       case 'low':
         return 'success';
@@ -219,7 +219,7 @@ export default function PartnersPage() {
                                 </span>
                               </div>
                               <Badge
-                                variant={getRiskBadgeVariant(partner.risk_level) as any}
+                                variant={getRiskBadgeVariant(partner.risk_level)}
                               >
                                 {RISK_LEVEL_LABELS[partner.risk_level]}
                               </Badge>

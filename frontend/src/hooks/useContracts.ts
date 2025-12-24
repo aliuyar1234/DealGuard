@@ -2,7 +2,6 @@
 
 import {
   Contract,
-  ContractListResponse,
   deleteContract,
   getContract,
   getContracts,

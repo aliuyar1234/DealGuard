@@ -46,7 +46,7 @@ export default function NewContractPage() {
       addToast('success', 'Vertrag hochgeladen! Die Analyse wird gestartet.');
       // Redirect to contract detail page
       router.push(`/vertraege/${response.id}`);
-    } catch (err) {
+    } catch {
       addToast('error', 'Upload fehlgeschlagen. Bitte versuchen Sie es erneut.');
     }
   };

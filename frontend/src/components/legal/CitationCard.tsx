@@ -45,7 +45,7 @@ export function CitationCard({ citation, isExpanded = false }: CitationCardProps
       {expanded && (
         <div className="px-3 pb-3 border-t border-gray-200">
           <blockquote className="mt-2 text-sm text-gray-700 italic border-l-2 border-blue-300 pl-3">
-            "{citation.clause_text}"
+            &quot;{citation.clause_text}&quot;
           </blockquote>
           {citation.paragraph && (
             <p className="mt-1 text-xs text-gray-500">
@@ -102,7 +102,7 @@ export function InlineCitation({ number, citation }: InlineCitationProps) {
           <p className="font-medium">{citation.contract_filename}</p>
           {citation.page && <p className="text-gray-400">Seite {citation.page}</p>}
           <p className="mt-1 italic text-gray-300 line-clamp-3">
-            "{citation.clause_text}"
+            &quot;{citation.clause_text}&quot;
           </p>
           {/* Arrow */}
           <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900" />

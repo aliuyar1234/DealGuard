@@ -4,11 +4,9 @@ import { Button, Card, CardContent, CardHeader, CardTitle, Input, useToast } fro
 import { signUp } from '@/lib/auth/supabase';
 import { Shield } from 'lucide-react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 export default function RegisterPage() {
-  const router = useRouter();
   const { addToast } = useToast();
   const [formData, setFormData] = useState({
     email: '',
@@ -46,7 +44,7 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const { data, error } = await signUp(formData.email, formData.password, {
+      const { error } = await signUp(formData.email, formData.password, {
         full_name: formData.fullName,
         organization_name: formData.organizationName,
       });
@@ -63,7 +61,7 @@ export default function RegisterPage() {
       // Show success message (Supabase may require email confirmation)
       addToast('success', 'Registrierung erfolgreich! Bitte bestätigen Sie Ihre E-Mail.');
       setSuccess(true);
-    } catch (err) {
+    } catch {
       setError('Ein unerwarteter Fehler ist aufgetreten');
     } finally {
       setLoading(false);

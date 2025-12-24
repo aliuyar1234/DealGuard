@@ -1,4 +1,4 @@
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { usePartners, usePartner, usePartnerAlerts } from '@/hooks/usePartners';
 import * as api from '@/lib/api/client';
 

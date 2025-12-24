@@ -2,7 +2,7 @@
 
 import { RiskScore } from '@/components/contracts/RiskScore';
 import { Shell } from '@/components/layout/Shell';
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
+import { Badge, type BadgeProps, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { useAuth } from '@/hooks/useAuth';
 import { useContracts } from '@/hooks/useContracts';
 import { Contract } from '@/lib/api/client';
@@ -12,7 +12,6 @@ import {
   getCategoryLabel,
   getContractTypeLabel,
   getSeverityLabel,
-  getStatusLabel,
 } from '@/lib/utils';
 import {
   AlertCircle,
@@ -22,7 +21,6 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
-  FileText,
   Info,
   Lightbulb,
   Loader2,
@@ -113,7 +111,7 @@ export default function ContractDetailPage() {
     }
   };
 
-  const getSeverityBadgeVariant = (severity: string) => {
+  const getSeverityBadgeVariant = (severity: string): BadgeProps['variant'] => {
     switch (severity) {
       case 'critical':
         return 'danger';
@@ -329,7 +327,7 @@ export default function ContractDetailPage() {
                               {finding.title}
                             </h3>
                             <Badge
-                              variant={getSeverityBadgeVariant(finding.severity) as any}
+                              variant={getSeverityBadgeVariant(finding.severity)}
                             >
                               {getSeverityLabel(finding.severity)}
                             </Badge>
