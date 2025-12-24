@@ -39,6 +39,10 @@ class DeepSeekClient:
         self.default_max_tokens = settings.anthropic_max_tokens  # Reuse setting
         self.cost_tracker = cost_tracker or CostTracker()
 
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self.client.close()
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -89,8 +93,16 @@ class DeepSeekClient:
 
             latency_ms = (time.monotonic() - start_time) * 1000
 
-            input_tokens = response.usage.prompt_tokens
-            output_tokens = response.usage.completion_tokens
+            usage = response.usage
+            if usage is None:
+                raise AIServiceError("DeepSeek response missing usage information")
+
+            input_tokens = usage.prompt_tokens
+            output_tokens = usage.completion_tokens
+
+            content = response.choices[0].message.content
+            if content is None:
+                raise AIServiceError("DeepSeek response missing content")
 
             # Track usage
             usage_record = self.cost_tracker.record(
@@ -110,7 +122,7 @@ class DeepSeekClient:
             )
 
             return AIResponse(
-                content=response.choices[0].message.content,
+                content=content,
                 model=model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,

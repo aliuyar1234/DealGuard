@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import AsyncContextManager, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from dealguard.infrastructure.database.models.contract import (
@@ -12,7 +13,6 @@ from dealguard.infrastructure.database.models.contract import (
     Contract,
     ContractAnalysis,
     ContractFinding,
-    ContractType,
 )
 
 
@@ -70,6 +70,13 @@ class StoragePort(Protocol):
         """Delete a stored object."""
 
 
+class TransactionPort(Protocol):
+    """Transaction boundary used by services to avoid long-held DB connections."""
+
+    async def commit(self) -> None:
+        """Commit current transaction and release the connection back to the pool."""
+
+
 class ContractRepositoryPort(Protocol):
     """Repository interface for contracts."""
 
@@ -82,11 +89,17 @@ class ContractRepositoryPort(Protocol):
     async def get_all(self, *, limit: int = 100, offset: int = 0) -> Sequence[Contract]:
         """List contracts for the current tenant."""
 
+    async def count(self) -> int:
+        """Count contracts for the current tenant."""
+
     async def get_by_file_hash(self, file_hash: str) -> Contract | None:
         """Find contract by file hash."""
 
     async def create(self, entity: Contract) -> Contract:
         """Persist a contract."""
+
+    async def replace_search_tokens(self, contract_id: UUID, contract_text: str) -> None:
+        """Replace the search token index for a contract."""
 
     async def update_status(
         self,
@@ -111,7 +124,7 @@ class ContractRepositoryPort(Protocol):
     async def get_contract_limit(self, organization_id: UUID) -> int | None:
         """Get the contract limit for an organization."""
 
-    def begin_nested(self) -> AsyncContextManager[None]:
+    def begin_nested(self) -> AbstractAsyncContextManager[None]:
         """Create a nested transaction context."""
 
 

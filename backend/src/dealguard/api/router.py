@@ -1,8 +1,16 @@
-"""Main API router aggregating all routes."""
+"""Main API router aggregating all v1 routes."""
 
 from fastapi import APIRouter
 
-from dealguard.api.routes import contracts, health, partners, legal_chat, company_profile, proactive, chat_v2, settings
+from dealguard.api.routes import (
+    company_profile,
+    contracts,
+    health,
+    legal_chat,
+    partners,
+    proactive,
+    settings,
+)
 
 # Create main router
 api_router = APIRouter()
@@ -14,5 +22,4 @@ api_router.include_router(partners.router)
 api_router.include_router(legal_chat.router)
 api_router.include_router(company_profile.router)
 api_router.include_router(proactive.router)
-api_router.include_router(chat_v2.router)  # DealGuard 2.0 Chat with Tool-Calling
 api_router.include_router(settings.router)  # User settings and API keys

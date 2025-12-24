@@ -1,41 +1,50 @@
 """SQLAlchemy ORM models."""
 
-from dealguard.infrastructure.database.models.base import Base, TimestampMixin, TenantMixin
-from dealguard.infrastructure.database.models.organization import Organization
-from dealguard.infrastructure.database.models.user import User
-from dealguard.infrastructure.database.models.contract import Contract, ContractAnalysis, ContractFinding
-from dealguard.infrastructure.database.models.partner import (
-    Partner,
-    PartnerCheck,
-    PartnerAlert,
-    ContractPartner,
-    PartnerType,
-    PartnerRiskLevel,
-    CheckType,
-    CheckStatus,
-    AlertSeverity,
-    AlertType,
+from dealguard.infrastructure.database.models.base import Base, TenantMixin, TimestampMixin
+from dealguard.infrastructure.database.models.contract import (
+    Contract,
+    ContractAnalysis,
+    ContractFinding,
 )
-from dealguard.infrastructure.database.models.usage import UsageLog
+from dealguard.infrastructure.database.models.contract_search import ContractSearchToken
 from dealguard.infrastructure.database.models.legal_chat import (
     LegalConversation,
     LegalMessage,
     MessageRole,
 )
+from dealguard.infrastructure.database.models.organization import Organization
+from dealguard.infrastructure.database.models.partner import (
+    AlertSeverity as PartnerAlertSeverity,
+)
+from dealguard.infrastructure.database.models.partner import (
+    AlertType as PartnerAlertType,
+)
+from dealguard.infrastructure.database.models.partner import (
+    CheckStatus,
+    CheckType,
+    ContractPartner,
+    Partner,
+    PartnerAlert,
+    PartnerCheck,
+    PartnerRiskLevel,
+    PartnerType,
+)
 from dealguard.infrastructure.database.models.proactive import (
-    ContractDeadline,
-    ProactiveAlert,
-    ComplianceCheck,
-    RiskSnapshot,
-    DeadlineType,
-    DeadlineStatus,
-    AlertSourceType,
-    AlertType,
     AlertSeverity,
+    AlertSourceType,
     AlertStatus,
+    AlertType,
+    ComplianceCheck,
     ComplianceCheckType,
     ComplianceStatus,
+    ContractDeadline,
+    DeadlineStatus,
+    DeadlineType,
+    ProactiveAlert,
+    RiskSnapshot,
 )
+from dealguard.infrastructure.database.models.usage import UsageLog
+from dealguard.infrastructure.database.models.user import User
 
 __all__ = [
     "Base",
@@ -46,6 +55,7 @@ __all__ = [
     "Contract",
     "ContractAnalysis",
     "ContractFinding",
+    "ContractSearchToken",
     "Partner",
     "PartnerCheck",
     "PartnerAlert",
@@ -54,6 +64,8 @@ __all__ = [
     "PartnerRiskLevel",
     "CheckType",
     "CheckStatus",
+    "PartnerAlertSeverity",
+    "PartnerAlertType",
     "AlertSeverity",
     "AlertType",
     "UsageLog",
@@ -67,8 +79,6 @@ __all__ = [
     "DeadlineType",
     "DeadlineStatus",
     "AlertSourceType",
-    "AlertType",
-    "AlertSeverity",
     "AlertStatus",
     "ComplianceCheckType",
     "ComplianceStatus",

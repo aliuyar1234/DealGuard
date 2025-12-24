@@ -1,15 +1,17 @@
 """Health check endpoints."""
 
-import asyncio
 import logging
+from typing import Any, cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
-from sqlalchemy import select, literal
+from sqlalchemy import literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.config import get_settings
 from dealguard.infrastructure.database.connection import get_session
+from dealguard.infrastructure.storage.s3 import S3Storage
+from dealguard.shared.concurrency import to_thread_limited
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,7 @@ async def health_check() -> HealthResponse:
 
 @router.get("/ready", response_model=ReadyResponse)
 async def readiness_check(
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> ReadyResponse:
     """Readiness check - verifies all dependencies are available."""
@@ -65,9 +68,11 @@ async def readiness_check(
         import redis.asyncio as redis
 
         settings = get_settings()
-        redis_client = redis.from_url(str(settings.redis_url))
+        redis_client = getattr(request.app.state, "redis_client", None)
+        if redis_client is None:
+            redis_client = cast(Any, redis.from_url)(str(settings.redis_url))
+            request.app.state.redis_client = redis_client
         await redis_client.ping()
-        await redis_client.close()
         checks["redis"] = True
     except Exception as e:
         logger.warning(f"Redis health check failed: {e}")
@@ -75,20 +80,16 @@ async def readiness_check(
 
     # Check S3 storage
     try:
-        import boto3
-        from botocore.config import Config
-
         settings = get_settings()
-        s3_client = boto3.client(
-            "s3",
-            endpoint_url=settings.s3_endpoint,
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
-            config=Config(signature_version="s3v4"),
-        )
-        await asyncio.to_thread(
-            s3_client.list_objects_v2, Bucket=settings.s3_bucket, MaxKeys=1
+        storage = getattr(request.app.state, "s3_storage", None)
+        if storage is None:
+            storage = S3Storage()
+            request.app.state.s3_storage = storage
+
+        await to_thread_limited(
+            storage.client.list_objects_v2,
+            Bucket=settings.s3_bucket,
+            MaxKeys=1,
         )
         checks["storage"] = True
     except Exception as e:

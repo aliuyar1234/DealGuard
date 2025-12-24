@@ -2,10 +2,10 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, String, Text, Integer, Float, Boolean, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,9 +17,9 @@ from dealguard.infrastructure.database.models.base import (
 )
 
 if TYPE_CHECKING:
+    from dealguard.infrastructure.database.models.contract import Contract
     from dealguard.infrastructure.database.models.organization import Organization
     from dealguard.infrastructure.database.models.user import User
-    from dealguard.infrastructure.database.models.contract import Contract
 
 
 class PartnerType(str, Enum):
@@ -113,7 +113,9 @@ class Partner(Base, TenantMixin, TimestampMixin, SoftDeleteMixin):
     street: Mapped[str | None] = mapped_column(String(255), nullable=True)
     city: Mapped[str | None] = mapped_column(String(100), nullable=True)
     postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    country: Mapped[str] = mapped_column(String(2), default="DE", nullable=False)  # ISO 3166-1 alpha-2
+    country: Mapped[str] = mapped_column(
+        String(2), default="DE", nullable=False
+    )  # ISO 3166-1 alpha-2
 
     # Contact
     website: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -128,7 +130,7 @@ class Partner(Base, TenantMixin, TimestampMixin, SoftDeleteMixin):
     last_check_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     # External data cache (from APIs)
-    external_data: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    external_data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Watchlist - if true, partner will be monitored for changes
     is_watched: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -191,7 +193,7 @@ class PartnerCheck(Base, TenantMixin, TimestampMixin):
     # Results
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Component score 0-100
     result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    raw_response: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    raw_response: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Provider info
     provider: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g., "north_data"
@@ -257,9 +259,7 @@ class ContractPartner(Base, TenantMixin, TimestampMixin):
     """Link between contracts and partners (many-to-many)."""
 
     __tablename__ = "contract_partners"
-    __table_args__ = (
-        UniqueConstraint("contract_id", "partner_id", name="uq_contract_partner"),
-    )
+    __table_args__ = (UniqueConstraint("contract_id", "partner_id", name="uq_contract_partner"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
 
@@ -276,7 +276,9 @@ class ContractPartner(Base, TenantMixin, TimestampMixin):
     )
 
     # Role in contract
-    role: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g., "supplier", "contractor"
+    role: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )  # e.g., "supplier", "contractor"
 
     # Notes about this relationship
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

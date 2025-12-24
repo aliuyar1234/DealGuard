@@ -14,13 +14,13 @@ API: https://api.opensanctions.org/
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from dealguard.infrastructure.external.base import (
-    SanctionProvider,
     SanctionCheckResult,
+    SanctionProvider,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,9 +130,7 @@ class OpenSanctionsProvider(SanctionProvider):
                     unique_matches.append(match)
 
             # Calculate score based on match confidence
-            is_sanctioned = any(
-                self._is_high_confidence_match(m) for m in unique_matches
-            )
+            is_sanctioned = any(self._is_high_confidence_match(m) for m in unique_matches)
 
             score = 0
             if unique_matches:
@@ -198,6 +196,7 @@ class OpenSanctionsProvider(SanctionProvider):
         Returns:
             List of matching entities
         """
+        _ = country
         try:
             # Use the match endpoint for name matching
             response = await client.get(
@@ -256,7 +255,10 @@ class OpenSanctionsProvider(SanctionProvider):
             if response.status_code != 200:
                 return None
 
-            return response.json()
+            data = response.json()
+            if isinstance(data, dict):
+                return cast(dict[str, Any], data)
+            return None
 
         except Exception as e:
             logger.error(f"Error fetching entity {entity_id}: {e}")
@@ -265,22 +267,25 @@ class OpenSanctionsProvider(SanctionProvider):
     def _is_high_confidence_match(self, match: dict[str, Any]) -> bool:
         """Check if a match is high confidence (likely a real hit)."""
         score = match.get("score", 0)
-        # Score >= 0.8 is considered high confidence
-        return score >= 0.8
+        if isinstance(score, (int, float)):
+            return float(score) >= 0.8
+        return False
 
     def _format_matches(self, matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Format matches for response."""
         formatted = []
         for match in matches[:10]:  # Limit to 10 matches
-            formatted.append({
-                "id": match.get("id"),
-                "name": match.get("caption", match.get("name", "")),
-                "schema": match.get("schema"),  # Person, Company, etc.
-                "score": round(match.get("score", 0), 2),
-                "datasets": match.get("datasets", []),
-                "countries": match.get("properties", {}).get("country", []),
-                "topics": match.get("properties", {}).get("topics", []),
-            })
+            formatted.append(
+                {
+                    "id": match.get("id"),
+                    "name": match.get("caption", match.get("name", "")),
+                    "schema": match.get("schema"),  # Person, Company, etc.
+                    "score": round(match.get("score", 0), 2),
+                    "datasets": match.get("datasets", []),
+                    "countries": match.get("properties", {}).get("country", []),
+                    "topics": match.get("properties", {}).get("topics", []),
+                }
+            )
         return formatted
 
     def _error_result(self, error_message: str) -> SanctionCheckResult:
@@ -342,19 +347,20 @@ class PEPScreeningProvider:
                     if any("pep" in t.lower() or "politician" in t.lower() for t in topics):
                         pep_matches.append(match)
 
-            is_pep = len(pep_matches) > 0 and any(
-                m.get("score", 0) >= 0.8 for m in pep_matches
-            )
+            is_pep = len(pep_matches) > 0 and any(m.get("score", 0) >= 0.8 for m in pep_matches)
 
             summary = (
-                f"PEP-Status: {'Ja' if is_pep else 'Nein'}. "
-                f"{len(pep_matches)} mögliche Treffer."
-            ) if pep_matches else "PEP-Status: Nein. Keine PEP-Treffer gefunden."
+                (f"PEP-Status: {'Ja' if is_pep else 'Nein'}. {len(pep_matches)} mögliche Treffer.")
+                if pep_matches
+                else "PEP-Status: Nein. Keine PEP-Treffer gefunden."
+            )
 
             return {
                 "is_pep": is_pep,
                 "matches": pep_matches if pep_matches else None,
-                "score": max((m.get("score", 0) for m in pep_matches), default=0) if pep_matches else 0,
+                "score": max((m.get("score", 0) for m in pep_matches), default=0)
+                if pep_matches
+                else 0,
                 "summary": summary,
                 "checked_at": datetime.now().isoformat(),
             }

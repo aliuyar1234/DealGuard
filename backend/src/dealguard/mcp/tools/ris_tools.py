@@ -96,7 +96,7 @@ async def search_ris(
             output.append(f"- Dokumentnummer: `{doc_nr}`")
             if index:
                 output.append(f"- Index: {index}")
-            output.append(f"- Verwende `get_law_text(\"{doc_nr}\")` für den Volltext")
+            output.append(f'- Verwende `get_law_text("{doc_nr}")` für den Volltext')
 
         return "\n".join(output)
 
@@ -154,6 +154,7 @@ async def get_law_text(document_number: str) -> str:
 
 
 # Convenience functions for common use cases
+
 
 async def search_abgb(query: str, limit: int = 5) -> str:
     """Search specifically in ABGB (Civil Code)."""

@@ -3,7 +3,7 @@
 from uuid import UUID
 
 import httpx
-from jose import JWTError, jwt
+import jwt
 
 from dealguard.config import get_settings
 from dealguard.infrastructure.auth.provider import AuthProvider, AuthUser
@@ -27,7 +27,7 @@ class SupabaseAuthProvider(AuthProvider):
 
     def __init__(self) -> None:
         settings = get_settings()
-        self.supabase_url = settings.supabase_url
+        self.supabase_url = settings.supabase_url.rstrip("/")
         self.jwt_secret = settings.supabase_jwt_secret
         self.service_role_key = settings.supabase_service_role_key
         self._client: httpx.AsyncClient | None = None
@@ -55,6 +55,7 @@ class SupabaseAuthProvider(AuthProvider):
                 self.jwt_secret,
                 algorithms=["HS256"],
                 audience="authenticated",
+                issuer=f"{self.supabase_url}/auth/v1",
             )
 
             # Extract user info from claims
@@ -67,12 +68,11 @@ class SupabaseAuthProvider(AuthProvider):
 
             # Get organization info from metadata
             organization_id = user_metadata.get("organization_id")
-            role = user_metadata.get("role", "member")
+            role_value = user_metadata.get("role")
+            role = role_value if isinstance(role_value, str) and role_value else "member"
 
             if not organization_id:
-                raise TokenInvalidError(
-                    "Benutzer ist keiner Organisation zugeordnet"
-                )
+                raise TokenInvalidError("Benutzer ist keiner Organisation zugeordnet")
 
             return AuthUser(
                 id=user_id,
@@ -85,7 +85,7 @@ class SupabaseAuthProvider(AuthProvider):
 
         except jwt.ExpiredSignatureError:
             raise TokenExpiredError("Token ist abgelaufen")
-        except JWTError as e:
+        except jwt.InvalidTokenError as e:
             logger.warning("jwt_decode_failed", error=str(e))
             raise TokenInvalidError("Token ist ungültig")
 
@@ -106,11 +106,14 @@ class SupabaseAuthProvider(AuthProvider):
             if not organization_id:
                 return None
 
+            role_value = user_metadata.get("role")
+            role = role_value if isinstance(role_value, str) and role_value else "member"
+
             return AuthUser(
                 id=data["id"],
                 email=data["email"],
                 organization_id=UUID(organization_id),
-                role=user_metadata.get("role", "member"),
+                role=role,
                 email_verified=data.get("email_confirmed_at") is not None,
                 full_name=user_metadata.get("full_name"),
             )
@@ -195,10 +198,13 @@ class SupabaseAuthProvider(AuthProvider):
             raise AuthenticationError("Benutzer nicht gefunden")
 
         # Build updated metadata
+        metadata_organization_id = str(organization_id or current_user.organization_id)
+        metadata_role = role or current_user.role
+        metadata_full_name = full_name or current_user.full_name
         metadata = {
-            "organization_id": str(organization_id or current_user.organization_id),
-            "role": role or current_user.role,
-            "full_name": full_name or current_user.full_name,
+            "organization_id": metadata_organization_id,
+            "role": metadata_role,
+            "full_name": metadata_full_name,
         }
 
         try:
@@ -212,16 +218,14 @@ class SupabaseAuthProvider(AuthProvider):
             return AuthUser(
                 id=data["id"],
                 email=data["email"],
-                organization_id=UUID(metadata["organization_id"]),
-                role=metadata["role"],
+                organization_id=UUID(metadata_organization_id),
+                role=metadata_role,
                 email_verified=data.get("email_confirmed_at") is not None,
-                full_name=metadata.get("full_name"),
+                full_name=metadata_full_name,
             )
 
         except httpx.HTTPError as e:
-            logger.error(
-                "supabase_update_user_failed", user_id=user_id, error=str(e)
-            )
+            logger.error("supabase_update_user_failed", user_id=user_id, error=str(e))
             raise AuthenticationError(f"Benutzer konnte nicht aktualisiert werden: {e}")
 
     async def close(self) -> None:

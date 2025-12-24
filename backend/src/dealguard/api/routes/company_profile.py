@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from dealguard.api.middleware.auth import CurrentUser, RequireMember
+from dealguard.api.schemas import APIRequestModel
 from dealguard.domain.legal.company_profile import (
     CompanyProfile,
     CompanyProfileService,
@@ -36,7 +37,7 @@ class CompanyProfileResponse(BaseModel):
     custom_guidelines: list[str] = []
 
 
-class UpdateCompanyProfileRequest(BaseModel):
+class UpdateCompanyProfileRequest(APIRequestModel):
     """Request to update company profile."""
 
     company_name: str | None = Field(None, max_length=255)
@@ -75,7 +76,7 @@ ProfileServiceDep = Annotated[CompanyProfileService, Depends(get_profile_service
 
 @router.get("/profile", response_model=CompanyProfileResponse)
 async def get_profile(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: ProfileServiceDep,
 ) -> CompanyProfileResponse:
     """Get the company's legal profile.
@@ -107,7 +108,7 @@ async def get_profile(
 @router.put("/profile", response_model=CompanyProfileResponse)
 async def update_profile(
     request: UpdateCompanyProfileRequest,
-    user: RequireMember,
+    _user: RequireMember,
     service: ProfileServiceDep,
 ) -> CompanyProfileResponse:
     """Update the company's legal profile.

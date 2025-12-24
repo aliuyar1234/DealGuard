@@ -8,13 +8,17 @@ This module provides proactive monitoring and alerting:
 - ComplianceService: Periodic compliance scanning
 """
 
+from dealguard.domain.proactive.alert_service import AlertFilter, AlertService, AlertStats
 from dealguard.domain.proactive.deadline_service import (
     DeadlineExtractionService,
     DeadlineMonitoringService,
     DeadlineStats,
 )
-from dealguard.domain.proactive.alert_service import AlertService, AlertFilter, AlertStats
-from dealguard.domain.proactive.risk_radar_service import RiskRadarService, RiskRadarResult, RiskCategory
+from dealguard.domain.proactive.risk_radar_service import (
+    RiskCategory,
+    RiskRadarResult,
+    RiskRadarService,
+)
 
 __all__ = [
     "DeadlineExtractionService",

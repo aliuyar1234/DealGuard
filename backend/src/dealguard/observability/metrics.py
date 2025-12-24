@@ -27,8 +27,9 @@ REQUEST_IN_PROGRESS = Gauge(
 
 def _get_route_path(request: Request) -> str:
     route: Any | None = request.scope.get("route")
-    if route is not None and getattr(route, "path", None):
-        return route.path
+    path = getattr(route, "path", None) if route is not None else None
+    if isinstance(path, str) and path:
+        return path
     return "unknown"
 
 
@@ -51,9 +52,7 @@ def setup_metrics(app: FastAPI) -> None:
             path = _get_route_path(request)
             status_code = str(response.status_code) if response else "500"
             REQUEST_LATENCY.labels(method=method, path=path).observe(duration)
-            REQUEST_COUNT.labels(
-                method=method, path=path, status_code=status_code
-            ).inc()
+            REQUEST_COUNT.labels(method=method, path=path, status_code=status_code).inc()
             REQUEST_IN_PROGRESS.labels(method=method).dec()
 
     @app.get("/metrics")

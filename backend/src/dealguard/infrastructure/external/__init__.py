@@ -1,25 +1,25 @@
 """External data providers for partner intelligence."""
 
 from dealguard.infrastructure.external.base import (
+    CompanyData,
     CompanyDataProvider,
     CompanySearchResult,
-    CompanyData,
-    CreditProvider,
     CreditCheckResult,
-    SanctionProvider,
-    SanctionCheckResult,
-    InsolvencyProvider,
+    CreditProvider,
     InsolvencyCheckResult,
+    InsolvencyProvider,
+    SanctionCheckResult,
+    SanctionProvider,
 )
 from dealguard.infrastructure.external.mock_provider import (
     MockCompanyProvider,
     MockCreditProvider,
-    MockSanctionProvider,
     MockInsolvencyProvider,
+    MockSanctionProvider,
 )
 from dealguard.infrastructure.external.openfirmenbuch import (
-    OpenFirmenbuchProvider,
     FallbackFirmenbuchProvider,
+    OpenFirmenbuchProvider,
 )
 from dealguard.infrastructure.external.opensanctions import (
     OpenSanctionsProvider,

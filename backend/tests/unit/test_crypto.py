@@ -4,21 +4,21 @@ Tests encryption, decryption, and key validation.
 """
 
 import os
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 # Set APP_SECRET_KEY before importing crypto module
-os.environ["APP_SECRET_KEY"] = "test-secret-key-for-encryption-32chars"
+os.environ["APP_SECRET_KEY"] = "00000000000000000000000000000000"
 
 
 @pytest.fixture(autouse=True)
 def mock_settings():
     """Mock get_settings for all crypto tests."""
     with patch("dealguard.shared.crypto.get_settings") as mock:
-        mock.return_value = MagicMock(
-            app_secret_key="test-secret-key-for-encryption-32chars"
-        )
+        mock.return_value = MagicMock(app_secret_key="00000000000000000000000000000000")
         from dealguard.shared.crypto import _get_fernet
+
         _get_fernet.cache_clear()
         yield mock
         _get_fernet.cache_clear()
@@ -29,7 +29,7 @@ class TestCryptoFunctions:
 
     def test_encrypt_secret_returns_encrypted_string(self):
         """Test that encrypt_secret returns a non-empty encrypted string."""
-        from dealguard.shared.crypto import encrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, encrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -44,7 +44,7 @@ class TestCryptoFunctions:
 
     def test_decrypt_secret_returns_original(self):
         """Test that decrypt_secret returns the original plaintext."""
-        from dealguard.shared.crypto import encrypt_secret, decrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, decrypt_secret, encrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -70,7 +70,7 @@ class TestCryptoFunctions:
 
     def test_is_encrypted_detects_encrypted_values(self):
         """Test that is_encrypted correctly identifies encrypted values."""
-        from dealguard.shared.crypto import encrypt_secret, is_encrypted, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, encrypt_secret, is_encrypted
 
         _get_fernet.cache_clear()
 
@@ -83,7 +83,7 @@ class TestCryptoFunctions:
 
     def test_encrypt_decrypt_roundtrip_various_inputs(self):
         """Test encryption/decryption with various input types."""
-        from dealguard.shared.crypto import encrypt_secret, decrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, decrypt_secret, encrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -102,7 +102,7 @@ class TestCryptoFunctions:
 
     def test_different_plaintexts_produce_different_ciphertexts(self):
         """Test that different inputs produce different outputs."""
-        from dealguard.shared.crypto import encrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, encrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -113,7 +113,7 @@ class TestCryptoFunctions:
 
     def test_same_plaintext_produces_different_ciphertexts(self):
         """Test that Fernet uses random IV (same input, different output)."""
-        from dealguard.shared.crypto import encrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, encrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -130,7 +130,7 @@ class TestKeyValidation:
 
     def test_insecure_default_key_raises_error(self):
         """Test that insecure default keys raise ValueError."""
-        from dealguard.shared.crypto import _get_fernet, _INSECURE_DEFAULT_KEYS
+        from dealguard.shared.crypto import _INSECURE_DEFAULT_KEYS, _get_fernet
 
         _get_fernet.cache_clear()
 
@@ -164,7 +164,7 @@ class TestDecryptionErrors:
 
     def test_decrypt_invalid_token_raises_error(self):
         """Test that decrypting invalid token raises ValueError."""
-        from dealguard.shared.crypto import decrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, decrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -177,7 +177,7 @@ class TestDecryptionErrors:
 
     def test_decrypt_wrong_key_raises_error(self):
         """Test that decrypting with wrong key raises ValueError."""
-        from dealguard.shared.crypto import encrypt_secret, decrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, decrypt_secret, encrypt_secret
 
         # Encrypt with one key
         with patch("dealguard.shared.crypto.get_settings") as mock_settings:

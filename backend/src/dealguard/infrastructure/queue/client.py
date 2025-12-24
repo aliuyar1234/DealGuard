@@ -3,7 +3,7 @@
 from typing import Any
 from uuid import UUID
 
-from arq.connections import ArqRedis, create_pool, RedisSettings
+from arq.connections import ArqRedis, RedisSettings, create_pool
 
 from dealguard.config import get_settings
 from dealguard.shared.logging import get_logger
@@ -18,9 +18,7 @@ async def get_queue_pool() -> ArqRedis:
     global _pool
     if _pool is None:
         settings = get_settings()
-        _pool = await create_pool(
-            RedisSettings.from_dsn(str(settings.redis_url))
-        )
+        _pool = await create_pool(RedisSettings.from_dsn(str(settings.redis_url)))
     return _pool
 
 

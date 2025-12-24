@@ -1,27 +1,27 @@
 """Partner intelligence service - core business logic."""
 
-from typing import Sequence
+from collections.abc import Sequence
+from typing import Any
 from uuid import UUID
 
+from dealguard.domain.partners.risk_calculator import PartnerRiskCalculator
 from dealguard.infrastructure.database.models.partner import (
-    Partner,
-    PartnerCheck,
-    PartnerAlert,
-    ContractPartner,
-    PartnerType,
-    PartnerRiskLevel,
-    CheckType,
-    CheckStatus,
     AlertSeverity,
     AlertType,
+    CheckStatus,
+    CheckType,
+    ContractPartner,
+    Partner,
+    PartnerAlert,
+    PartnerCheck,
+    PartnerType,
 )
 from dealguard.infrastructure.database.repositories.partner import (
-    PartnerRepository,
-    PartnerCheckRepository,
-    PartnerAlertRepository,
     ContractPartnerRepository,
+    PartnerAlertRepository,
+    PartnerCheckRepository,
+    PartnerRepository,
 )
-from dealguard.domain.partners.risk_calculator import PartnerRiskCalculator
 from dealguard.shared.exceptions import NotFoundError, ValidationError
 from dealguard.shared.logging import get_logger
 
@@ -208,9 +208,7 @@ class PartnerService:
         risk_score, risk_level = self.risk_calculator.calculate(completed_checks)
 
         # Update partner
-        partner = await self.partner_repo.update_risk_assessment(
-            partner, risk_score, risk_level
-        )
+        partner = await self.partner_repo.update_risk_assessment(partner, risk_score, risk_level)
 
         logger.info(
             "partner_risk_calculated",
@@ -221,13 +219,23 @@ class PartnerService:
 
         return partner
 
-    async def get_high_risk_partners(self) -> Sequence[Partner]:
-        """Get all high-risk partners."""
-        return await self.partner_repo.get_high_risk_partners()
+    async def get_high_risk_partners(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Sequence[Partner]:
+        """Get high-risk partners."""
+        return await self.partner_repo.get_high_risk_partners(limit=limit, offset=offset)
 
-    async def get_watched_partners(self) -> Sequence[Partner]:
-        """Get all watched partners."""
-        return await self.partner_repo.get_watched_partners()
+    async def get_watched_partners(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Sequence[Partner]:
+        """Get watched partners."""
+        return await self.partner_repo.get_watched_partners(limit=limit, offset=offset)
 
     # ----- Contract Linking -----
 
@@ -399,7 +407,7 @@ class PartnerService:
         check: PartnerCheck,
         score: int | None,
         result_summary: str,
-        raw_response: dict,
+        raw_response: dict[str, Any],
         provider_reference: str | None = None,
     ) -> PartnerCheck:
         """Complete a check with results."""
@@ -426,9 +434,7 @@ class PartnerService:
         error_message: str,
     ) -> PartnerCheck:
         """Mark a check as failed."""
-        return await self.check_repo.update_status(
-            check, CheckStatus.FAILED, error_message
-        )
+        return await self.check_repo.update_status(check, CheckStatus.FAILED, error_message)
 
     async def get_checks_for_partner(
         self,

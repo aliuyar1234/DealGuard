@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
+from typing import Any
 
 from dealguard.mcp.models import (
     CheckPEPInput,
@@ -36,20 +38,25 @@ async def dealguard_check_sanctions(params: CheckSanctionsInput) -> str:
         str: Sanktionsstatus mit Details bei Treffern
     """
     try:
-        from dealguard.infrastructure.external.opensanctions import OpenSanctionsClient
+        from dealguard.infrastructure.external.opensanctions import OpenSanctionsProvider
 
-        client = OpenSanctionsClient()
-        result = await client.check_sanctions(
-            name=params.name,
-            country=params.country,
-            aliases=params.aliases,
-        )
+        provider = OpenSanctionsProvider()
+        try:
+            result = await provider.check_sanctions(
+                company_name=params.name,
+                country=params.country,
+                aliases=params.aliases,
+            )
+        finally:
+            await provider.close()
+
+        result_dict = asdict(result)
 
         if params.response_format == ResponseFormat.JSON:
-            return json.dumps(result, indent=2, ensure_ascii=False)
+            return json.dumps(result_dict, indent=2, ensure_ascii=False)
 
-        if result.get("is_sanctioned"):
-            matches = result.get("matches", [])
+        if result.is_sanctioned:
+            matches = result.matches or []
             lines = [
                 f"# ⚠️ SANKTIONSTREFFER: {params.name}",
                 "",
@@ -58,10 +65,21 @@ async def dealguard_check_sanctions(params: CheckSanctionsInput) -> str:
             ]
 
             for match in matches:
-                lines.append(f"## {match.get('name', 'Unbekannt')}")
-                lines.append(f"- Liste: {match.get('dataset', '-')}")
-                lines.append(f"- Grund: {match.get('reason', '-')}")
-                lines.append(f"- Match-Score: {match.get('score', 0):.0%}")
+                name = match.get("name") or "Unbekannt"
+                datasets = match.get("datasets") or []
+                dataset_label = (
+                    ", ".join(datasets) if isinstance(datasets, list) else str(datasets)
+                )
+                match_score = match.get("score", 0.0)
+                score_pct = (
+                    f"{match_score:.0%}"
+                    if isinstance(match_score, (int, float))
+                    else str(match_score)
+                )
+
+                lines.append(f"## {name}")
+                lines.append(f"- Liste(n): {dataset_label or '-'}")
+                lines.append(f"- Match-Score: {score_pct}")
                 lines.append("")
 
             lines.extend(
@@ -111,13 +129,16 @@ async def dealguard_check_pep(params: CheckPEPInput) -> str:
         str: PEP-Status mit Details
     """
     try:
-        from dealguard.infrastructure.external.opensanctions import OpenSanctionsClient
+        from dealguard.infrastructure.external.opensanctions import PEPScreeningProvider
 
-        client = OpenSanctionsClient()
-        result = await client.check_pep(
-            name=params.person_name,
-            country=params.country,
-        )
+        provider = PEPScreeningProvider()
+        try:
+            result = await provider.check_pep(
+                person_name=params.person_name,
+                country=params.country,
+            )
+        finally:
+            await provider.close()
 
         if params.response_format == ResponseFormat.JSON:
             return json.dumps(result, indent=2, ensure_ascii=False)
@@ -176,14 +197,52 @@ async def dealguard_comprehensive_compliance(params: ComprehensiveComplianceInpu
         str: Umfassender Compliance-Report
     """
     try:
-        from dealguard.infrastructure.external.opensanctions import OpenSanctionsClient
-
-        client = OpenSanctionsClient()
-        result = await client.comprehensive_check(
-            name=params.name,
-            entity_type=params.entity_type.value,
-            country=params.country,
+        from dealguard.infrastructure.external.opensanctions import (
+            OpenSanctionsProvider,
+            PEPScreeningProvider,
         )
+
+        sanctions = OpenSanctionsProvider()
+        pep = PEPScreeningProvider()
+        try:
+            sanctions_result = await sanctions.check_sanctions(
+                company_name=params.name,
+                country=params.country,
+                aliases=None,
+            )
+
+            pep_result: dict[str, Any]
+            if params.entity_type.value == "person":
+                pep_result = await pep.check_pep(
+                    person_name=params.name,
+                    country=params.country,
+                )
+            else:
+                pep_result = {
+                    "is_pep": False,
+                    "matches": None,
+                    "score": 0,
+                    "summary": "PEP-Status: Nicht geprüft (Unternehmen).",
+                }
+        finally:
+            await sanctions.close()
+            await pep.close()
+
+        result = {
+            "name": params.name,
+            "entity_type": params.entity_type.value,
+            "country": params.country,
+            "is_sanctioned": sanctions_result.is_sanctioned,
+            "sanction_matches": sanctions_result.matches or None,
+            "sanction_score": sanctions_result.score,
+            "is_pep": bool(pep_result.get("is_pep", False)),
+            "pep_matches": pep_result.get("matches"),
+            "pep_score": pep_result.get("score", 0),
+            "summary": {
+                "sanctions": sanctions_result.summary,
+                "pep": pep_result.get("summary"),
+            },
+        }
 
         if params.response_format == ResponseFormat.JSON:
             return json.dumps(result, indent=2, ensure_ascii=False)
@@ -205,11 +264,13 @@ async def dealguard_comprehensive_compliance(params: ComprehensiveComplianceInpu
 
         if result.get("sanction_matches"):
             for match in result["sanction_matches"]:
-                lines.append(f"- {match.get('name')}: {match.get('dataset')}")
+                datasets = match.get("datasets") or []
+                dataset_label = (
+                    ", ".join(datasets) if isinstance(datasets, list) else str(datasets)
+                )
+                lines.append(f"- {match.get('name')}: {dataset_label}")
 
-        lines.append(
-            f"\n### PEP-Status: {'⚠️ PEP' if result.get('is_pep') else '✅ Kein PEP'}"
-        )
+        lines.append(f"\n### PEP-Status: {'⚠️ PEP' if result.get('is_pep') else '✅ Kein PEP'}")
 
         if result.get("pep_matches"):
             for match in result["pep_matches"]:

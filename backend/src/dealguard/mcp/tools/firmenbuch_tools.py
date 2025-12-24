@@ -6,11 +6,9 @@ via OpenFirmenbuch (free) and other sources.
 
 import json
 import logging
-from typing import Any
 
 from dealguard.infrastructure.external.openfirmenbuch import (
     OpenFirmenbuchProvider,
-    FallbackFirmenbuchProvider,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,35 +46,46 @@ async def search_firmenbuch(
         await provider.close()
 
         if not results:
-            return json.dumps({
-                "status": "no_results",
-                "message": f"Keine Unternehmen für '{query}' gefunden.",
-                "query": query,
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "status": "no_results",
+                    "message": f"Keine Unternehmen für '{query}' gefunden.",
+                    "query": query,
+                },
+                ensure_ascii=False,
+            )
 
         companies = []
         for r in results:
-            companies.append({
-                "firmenbuchnummer": r.handelsregister_id,
-                "name": r.name,
-                "rechtsform": r.legal_form,
-                "sitz": r.city,
-                "status": r.status,
-            })
+            companies.append(
+                {
+                    "firmenbuchnummer": r.handelsregister_id,
+                    "name": r.name,
+                    "rechtsform": r.legal_form,
+                    "sitz": r.city,
+                    "status": r.status,
+                }
+            )
 
-        return json.dumps({
-            "status": "ok",
-            "count": len(companies),
-            "companies": companies,
-            "source": "OpenFirmenbuch",
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "ok",
+                "count": len(companies),
+                "companies": companies,
+                "source": "OpenFirmenbuch",
+            },
+            ensure_ascii=False,
+        )
 
     except Exception as e:
         logger.exception(f"Firmenbuch search error: {e}")
-        return json.dumps({
-            "status": "error",
-            "message": f"Fehler bei der Firmenbuch-Suche: {str(e)}",
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Fehler bei der Firmenbuch-Suche: {str(e)}",
+            },
+            ensure_ascii=False,
+        )
 
 
 async def get_firmenbuch_auszug(
@@ -110,11 +119,14 @@ async def get_firmenbuch_auszug(
         await provider.close()
 
         if not company:
-            return json.dumps({
-                "status": "not_found",
-                "message": f"Kein Unternehmen mit FN '{firmenbuchnummer}' gefunden.",
-                "firmenbuchnummer": firmenbuchnummer,
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "status": "not_found",
+                    "message": f"Kein Unternehmen mit FN '{firmenbuchnummer}' gefunden.",
+                    "firmenbuchnummer": firmenbuchnummer,
+                },
+                ensure_ascii=False,
+            )
 
         result = {
             "status": "ok",
@@ -128,11 +140,13 @@ async def get_firmenbuch_auszug(
                 "strasse": company.street,
                 "plz": company.postal_code,
                 "ort": company.city,
-            } if company.street else None,
+            }
+            if company.street
+            else None,
             "stammkapital": f"EUR {company.share_capital:,.2f}" if company.share_capital else None,
             "geschaeftsfuehrer": company.managing_directors,
             "unternehmensgegenstand": company.business_purpose,
-            "status": company.status,
+            "company_status": company.status,
             "source": "OpenFirmenbuch",
         }
 
@@ -143,10 +157,13 @@ async def get_firmenbuch_auszug(
 
     except Exception as e:
         logger.exception(f"Firmenbuch get error: {e}")
-        return json.dumps({
-            "status": "error",
-            "message": f"Fehler beim Abrufen der Firmendaten: {str(e)}",
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Fehler beim Abrufen der Firmendaten: {str(e)}",
+            },
+            ensure_ascii=False,
+        )
 
 
 async def check_company_austria(
@@ -179,13 +196,16 @@ async def check_company_austria(
 
         if not results:
             await provider.close()
-            return json.dumps({
-                "status": "not_found",
-                "message": f"Unternehmen '{company_name}' nicht im Firmenbuch gefunden.",
-                "hinweis": "Das Unternehmen könnte unter einem anderen Namen eingetragen sein, "
-                          "nicht in Österreich registriert sein, oder ein Einzelunternehmen ohne "
-                          "Firmenbuch-Eintrag sein.",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "status": "not_found",
+                    "message": f"Unternehmen '{company_name}' nicht im Firmenbuch gefunden.",
+                    "hinweis": "Das Unternehmen könnte unter einem anderen Namen eingetragen sein, "
+                    "nicht in Österreich registriert sein, oder ein Einzelunternehmen ohne "
+                    "Firmenbuch-Eintrag sein.",
+                },
+                ensure_ascii=False,
+            )
 
         # Get best match
         best_match = results[0]
@@ -201,9 +221,11 @@ async def check_company_austria(
                 "name": company.name,
                 "rechtsform": company.legal_form,
                 "sitz": company.city,
-                "status": company.status,
+                "company_status": company.status,
                 "geschaeftsfuehrer": company.managing_directors,
-                "stammkapital": f"EUR {company.share_capital:,.2f}" if company.share_capital else None,
+                "stammkapital": f"EUR {company.share_capital:,.2f}"
+                if company.share_capital
+                else None,
                 "source": "OpenFirmenbuch",
                 "weitere_treffer": len(results) - 1 if len(results) > 1 else 0,
             }
@@ -214,7 +236,7 @@ async def check_company_austria(
                 "name": best_match.name,
                 "rechtsform": best_match.legal_form,
                 "sitz": best_match.city,
-                "status": best_match.status,
+                "company_status": best_match.status,
                 "source": "OpenFirmenbuch",
                 "hinweis": "Detaildaten nicht verfügbar",
             }
@@ -226,10 +248,13 @@ async def check_company_austria(
 
     except Exception as e:
         logger.exception(f"Company check error: {e}")
-        return json.dumps({
-            "status": "error",
-            "message": f"Fehler bei der Firmenprüfung: {str(e)}",
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Fehler bei der Firmenprüfung: {str(e)}",
+            },
+            ensure_ascii=False,
+        )
 
 
 # Tool definitions for MCP
@@ -237,8 +262,8 @@ FIRMENBUCH_TOOLS = [
     {
         "name": "search_firmenbuch",
         "description": "Durchsucht das österreichische Firmenbuch nach Unternehmen. "
-                      "Liefert Firmenwortlaut, FN-Nummer, Rechtsform und Sitz. "
-                      "Verwende dieses Tool für Unternehmensrecherchen in Österreich.",
+        "Liefert Firmenwortlaut, FN-Nummer, Rechtsform und Sitz. "
+        "Verwende dieses Tool für Unternehmensrecherchen in Österreich.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -258,7 +283,7 @@ FIRMENBUCH_TOOLS = [
     {
         "name": "get_firmenbuch_auszug",
         "description": "Holt detaillierte Firmendaten aus dem Firmenbuch anhand der FN-Nummer. "
-                      "Liefert Geschäftsführer, Stammkapital, Unternehmensgegenstand, etc.",
+        "Liefert Geschäftsführer, Stammkapital, Unternehmensgegenstand, etc.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -273,8 +298,8 @@ FIRMENBUCH_TOOLS = [
     {
         "name": "check_company_austria",
         "description": "Schnelle Prüfung eines österreichischen Unternehmens. "
-                      "Sucht nach dem Namen und liefert Basisdaten des besten Treffers. "
-                      "Ideal für Partner-Checks und Due Diligence.",
+        "Sucht nach dem Namen und liefert Basisdaten des besten Treffers. "
+        "Ideal für Partner-Checks und Due Diligence.",
         "input_schema": {
             "type": "object",
             "properties": {

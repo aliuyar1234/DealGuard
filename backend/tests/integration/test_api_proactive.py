@@ -3,21 +3,11 @@ Integration tests for Proactive API routes.
 
 Tests the /api/v1/proactive/* endpoints.
 """
+
 import uuid
-from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
-
-from dealguard.infrastructure.database.models.proactive import (
-    AlertSeverity,
-    AlertStatus,
-    AlertType,
-    AlertSourceType,
-    DeadlineStatus,
-    DeadlineType,
-)
 
 
 class TestDeadlineEndpoints:
@@ -29,9 +19,11 @@ class TestDeadlineEndpoints:
         mock = AsyncMock()
         mock.get_upcoming_deadlines = AsyncMock(return_value=[])
         mock.get_overdue_deadlines = AsyncMock(return_value=[])
-        mock.get_deadline_stats = AsyncMock(return_value=MagicMock(
-            total=10, active=8, overdue=2, upcoming_7_days=3, upcoming_30_days=5
-        ))
+        mock.get_deadline_stats = AsyncMock(
+            return_value=MagicMock(
+                total=10, active=8, overdue=2, upcoming_7_days=3, upcoming_30_days=5
+            )
+        )
         mock.mark_deadline_handled = AsyncMock()
         mock.dismiss_deadline = AsyncMock()
         mock.verify_deadline = AsyncMock()
@@ -39,8 +31,11 @@ class TestDeadlineEndpoints:
 
     def test_list_deadlines_returns_200(self, client, mock_deadline_service):
         """Test GET /proactive/deadlines returns 200."""
-        with patch("dealguard.api.routes.proactive.DeadlineMonitoringService", return_value=mock_deadline_service):
-            response = client.get(
+        with patch(
+            "dealguard.api.routes.proactive.DeadlineMonitoringService",
+            return_value=mock_deadline_service,
+        ):
+            client.get(
                 "/api/v1/proactive/deadlines",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -49,8 +44,11 @@ class TestDeadlineEndpoints:
 
     def test_deadline_stats_returns_correct_structure(self, client, mock_deadline_service):
         """Test GET /proactive/deadlines/stats returns correct structure."""
-        with patch("dealguard.api.routes.proactive.DeadlineMonitoringService", return_value=mock_deadline_service):
-            response = client.get(
+        with patch(
+            "dealguard.api.routes.proactive.DeadlineMonitoringService",
+            return_value=mock_deadline_service,
+        ):
+            client.get(
                 "/api/v1/proactive/deadlines/stats",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -60,8 +58,11 @@ class TestDeadlineEndpoints:
     def test_mark_deadline_handled_requires_action(self, client, mock_deadline_service):
         """Test POST /proactive/deadlines/{id}/handle requires action."""
         deadline_id = uuid.uuid4()
-        with patch("dealguard.api.routes.proactive.DeadlineMonitoringService", return_value=mock_deadline_service):
-            response = client.post(
+        with patch(
+            "dealguard.api.routes.proactive.DeadlineMonitoringService",
+            return_value=mock_deadline_service,
+        ):
+            client.post(
                 f"/api/v1/proactive/deadlines/{deadline_id}/handle",
                 headers={"Authorization": "Bearer test-token"},
                 json={"action": "renewed", "notes": "Contract renewed"},
@@ -77,10 +78,11 @@ class TestAlertEndpoints:
         """Create mock alert service."""
         mock = AsyncMock()
         mock.list_alerts = AsyncMock(return_value=[])
-        mock.get_stats = AsyncMock(return_value=MagicMock(
-            total=20, new=5, seen=8, in_progress=3, resolved=4,
-            by_severity={}, by_type={}
-        ))
+        mock.get_stats = AsyncMock(
+            return_value=MagicMock(
+                total=20, new=5, seen=8, in_progress=3, resolved=4, by_severity={}, by_type={}
+            )
+        )
         mock.count_new_alerts = AsyncMock(return_value=5)
         mock.get_alert = AsyncMock()
         mock.mark_seen = AsyncMock()
@@ -93,7 +95,7 @@ class TestAlertEndpoints:
     def test_list_alerts_returns_200(self, client, mock_alert_service):
         """Test GET /proactive/alerts returns 200."""
         with patch("dealguard.api.routes.proactive.AlertService", return_value=mock_alert_service):
-            response = client.get(
+            client.get(
                 "/api/v1/proactive/alerts",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -102,7 +104,7 @@ class TestAlertEndpoints:
     def test_alert_count_for_badge(self, client, mock_alert_service):
         """Test GET /proactive/alerts/count returns count for badge."""
         with patch("dealguard.api.routes.proactive.AlertService", return_value=mock_alert_service):
-            response = client.get(
+            client.get(
                 "/api/v1/proactive/alerts/count",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -112,7 +114,7 @@ class TestAlertEndpoints:
         """Test POST /proactive/alerts/{id}/snooze accepts days parameter."""
         alert_id = uuid.uuid4()
         with patch("dealguard.api.routes.proactive.AlertService", return_value=mock_alert_service):
-            response = client.post(
+            client.post(
                 f"/api/v1/proactive/alerts/{alert_id}/snooze",
                 headers={"Authorization": "Bearer test-token"},
                 json={"days": 7},
@@ -122,7 +124,7 @@ class TestAlertEndpoints:
     def test_mark_all_alerts_seen(self, client, mock_alert_service):
         """Test POST /proactive/alerts/mark-all-seen."""
         with patch("dealguard.api.routes.proactive.AlertService", return_value=mock_alert_service):
-            response = client.post(
+            client.post(
                 "/api/v1/proactive/alerts/mark-all-seen",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -136,21 +138,25 @@ class TestRiskRadarEndpoints:
     def mock_risk_radar_service(self):
         """Create mock risk radar service."""
         mock = AsyncMock()
-        mock.get_risk_radar = AsyncMock(return_value=MagicMock(
-            overall_score=45,
-            overall_trend="stable",
-            categories=[],
-            urgent_alerts=2,
-            upcoming_deadlines=5,
-            recommendations=[],
-        ))
+        mock.get_risk_radar = AsyncMock(
+            return_value=MagicMock(
+                overall_score=45,
+                overall_trend="stable",
+                categories=[],
+                urgent_alerts=2,
+                upcoming_deadlines=5,
+                recommendations=[],
+            )
+        )
         mock.get_risk_history = AsyncMock(return_value=[])
         return mock
 
     def test_get_risk_radar_returns_correct_structure(self, client, mock_risk_radar_service):
         """Test GET /proactive/risk-radar returns correct structure."""
-        with patch("dealguard.api.routes.proactive.RiskRadarService", return_value=mock_risk_radar_service):
-            response = client.get(
+        with patch(
+            "dealguard.api.routes.proactive.RiskRadarService", return_value=mock_risk_radar_service
+        ):
+            client.get(
                 "/api/v1/proactive/risk-radar",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -159,8 +165,10 @@ class TestRiskRadarEndpoints:
 
     def test_risk_history_with_days_parameter(self, client, mock_risk_radar_service):
         """Test GET /proactive/risk-radar/history accepts days parameter."""
-        with patch("dealguard.api.routes.proactive.RiskRadarService", return_value=mock_risk_radar_service):
-            response = client.get(
+        with patch(
+            "dealguard.api.routes.proactive.RiskRadarService", return_value=mock_risk_radar_service
+        ):
+            client.get(
                 "/api/v1/proactive/risk-radar/history?days=30",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -215,7 +223,7 @@ class TestAlertFiltering:
     def test_filter_by_status(self, client, mock_alert_service):
         """Test filtering alerts by status."""
         with patch("dealguard.api.routes.proactive.AlertService", return_value=mock_alert_service):
-            response = client.get(
+            client.get(
                 "/api/v1/proactive/alerts?status=new&status=seen",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -225,7 +233,7 @@ class TestAlertFiltering:
     def test_filter_by_severity(self, client, mock_alert_service):
         """Test filtering alerts by severity."""
         with patch("dealguard.api.routes.proactive.AlertService", return_value=mock_alert_service):
-            response = client.get(
+            client.get(
                 "/api/v1/proactive/alerts?severity=critical",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -234,7 +242,7 @@ class TestAlertFiltering:
     def test_include_snoozed_parameter(self, client, mock_alert_service):
         """Test include_snoozed parameter."""
         with patch("dealguard.api.routes.proactive.AlertService", return_value=mock_alert_service):
-            response = client.get(
+            client.get(
                 "/api/v1/proactive/alerts?include_snoozed=true",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -255,8 +263,11 @@ class TestDeadlineFiltering:
 
     def test_filter_by_days_ahead(self, client, mock_deadline_service):
         """Test filtering deadlines by days_ahead."""
-        with patch("dealguard.api.routes.proactive.DeadlineMonitoringService", return_value=mock_deadline_service):
-            response = client.get(
+        with patch(
+            "dealguard.api.routes.proactive.DeadlineMonitoringService",
+            return_value=mock_deadline_service,
+        ):
+            client.get(
                 "/api/v1/proactive/deadlines?days_ahead=7",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -265,8 +276,11 @@ class TestDeadlineFiltering:
     def test_filter_by_contract_id(self, client, mock_deadline_service):
         """Test filtering deadlines by contract_id."""
         contract_id = uuid.uuid4()
-        with patch("dealguard.api.routes.proactive.DeadlineMonitoringService", return_value=mock_deadline_service):
-            response = client.get(
+        with patch(
+            "dealguard.api.routes.proactive.DeadlineMonitoringService",
+            return_value=mock_deadline_service,
+        ):
+            client.get(
                 f"/api/v1/proactive/deadlines?contract_id={contract_id}",
                 headers={"Authorization": "Bearer test-token"},
             )
@@ -274,8 +288,11 @@ class TestDeadlineFiltering:
 
     def test_include_overdue_parameter(self, client, mock_deadline_service):
         """Test include_overdue parameter."""
-        with patch("dealguard.api.routes.proactive.DeadlineMonitoringService", return_value=mock_deadline_service):
-            response = client.get(
+        with patch(
+            "dealguard.api.routes.proactive.DeadlineMonitoringService",
+            return_value=mock_deadline_service,
+        ):
+            client.get(
                 "/api/v1/proactive/deadlines?include_overdue=false",
                 headers={"Authorization": "Bearer test-token"},
             )

@@ -1,12 +1,12 @@
 """Partner risk score calculator."""
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from dealguard.infrastructure.database.models.partner import (
+    CheckStatus,
+    CheckType,
     PartnerCheck,
     PartnerRiskLevel,
-    CheckType,
-    CheckStatus,
 )
 
 
@@ -49,8 +49,7 @@ class PartnerRiskCalculator:
 
         # Filter to completed checks with scores
         scored_checks = [
-            c for c in checks
-            if c.status == CheckStatus.COMPLETED and c.score is not None
+            c for c in checks if c.status == CheckStatus.COMPLETED and c.score is not None
         ]
 
         if not scored_checks:
@@ -62,6 +61,8 @@ class PartnerRiskCalculator:
 
         for check in scored_checks:
             weight = self.WEIGHTS.get(check.check_type, 0.1)
+            if check.score is None:
+                continue
             weighted_sum += check.score * weight
             total_weight += weight
 
@@ -99,7 +100,7 @@ class PartnerRiskCalculator:
         Returns:
             Dict mapping component names to scores (or None if not available)
         """
-        component_scores = {
+        component_scores: dict[str, int | None] = {
             "financial_stability": None,
             "legal_compliance": None,
             "reputation": None,

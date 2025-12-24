@@ -1,7 +1,8 @@
 """AI cost tracking for billing and monitoring."""
 
+from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from dealguard.shared.context import get_optional_tenant_context
@@ -47,9 +48,9 @@ class CostTracker:
     """
 
     def __init__(self) -> None:
-        # In-memory buffer for batch inserts
-        self._buffer: list[UsageRecord] = []
-        self._buffer_size = 100  # Flush after 100 records
+        # Keep only a bounded amount of in-memory history to avoid unbounded
+        # growth in long-running processes (API server, worker).
+        self._buffer: deque[UsageRecord] = deque(maxlen=1_000)
 
     def calculate_cost(
         self,
@@ -105,10 +106,10 @@ class CostTracker:
             action=action,
             resource_id=resource_id,
             organization_id=organization_id,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
 
-        logger.info(
+        logger.debug(
             "ai_usage_recorded",
             model=model,
             input_tokens=input_tokens,
@@ -120,10 +121,6 @@ class CostTracker:
 
         self._buffer.append(record)
 
-        # TODO: Flush to database when buffer is full
-        # if len(self._buffer) >= self._buffer_size:
-        #     await self._flush()
-
         return record
 
     async def get_monthly_usage(
@@ -131,15 +128,17 @@ class CostTracker:
         organization_id: UUID,
         year: int,
         month: int,
-    ) -> dict:
+    ) -> dict[str, int | dict[str, int]]:
         """Get monthly usage statistics for an organization.
 
         TODO: Implement database query
         """
+        _ = (organization_id, year, month)
         # Placeholder - will query usage_logs table
+        by_action: dict[str, int] = {}
         return {
             "total_cost_cents": 0,
             "total_tokens": 0,
             "analysis_count": 0,
-            "by_action": {},
+            "by_action": by_action,
         }

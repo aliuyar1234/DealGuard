@@ -1,6 +1,6 @@
 """S3-compatible storage for document files."""
 
-import asyncio
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import boto3
@@ -8,6 +8,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from dealguard.config import get_settings
+from dealguard.shared.concurrency import to_thread_limited
 from dealguard.shared.exceptions import StorageError
 from dealguard.shared.logging import get_logger
 
@@ -19,8 +20,8 @@ class S3Storage:
 
     Works with AWS S3 in production and MinIO for local development.
 
-    Note: Uses asyncio.to_thread() to run boto3 sync calls in a thread pool,
-    avoiding blocking the async event loop.
+    Note: Uses a bounded threadpool helper (`to_thread_limited`) to run boto3
+    sync calls without blocking the async event loop.
     """
 
     def __init__(self) -> None:
@@ -70,7 +71,7 @@ class S3Storage:
 
         try:
             # Run sync boto3 call in thread pool to avoid blocking event loop
-            await asyncio.to_thread(
+            await to_thread_limited(
                 self.client.put_object,
                 Bucket=self.bucket,
                 Key=key,
@@ -108,13 +109,13 @@ class S3Storage:
             StorageError: If download fails
         """
         try:
-            # Run sync boto3 call in thread pool to avoid blocking event loop
-            response = await asyncio.to_thread(
-                self.client.get_object, Bucket=self.bucket, Key=key
+            response = cast(
+                dict[str, Any],
+                await to_thread_limited(self.client.get_object, Bucket=self.bucket, Key=key),
             )
             # Reading the body is also blocking IO
-            content = await asyncio.to_thread(response["Body"].read)
-            return content
+            body = cast(Any, response["Body"])
+            return cast(bytes, await to_thread_limited(body.read))
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code")
@@ -133,10 +134,7 @@ class S3Storage:
             StorageError: If deletion fails
         """
         try:
-            # Run sync boto3 call in thread pool to avoid blocking event loop
-            await asyncio.to_thread(
-                self.client.delete_object, Bucket=self.bucket, Key=key
-            )
+            await to_thread_limited(self.client.delete_object, Bucket=self.bucket, Key=key)
             logger.info("file_deleted", key=key)
 
         except ClientError as e:
@@ -161,12 +159,14 @@ class S3Storage:
             StorageError: If URL generation fails
         """
         try:
-            # Run sync boto3 call in thread pool to avoid blocking event loop
-            url = await asyncio.to_thread(
+            url = cast(
+                str,
+                await to_thread_limited(
                 self.client.generate_presigned_url,
                 "get_object",
                 Params={"Bucket": self.bucket, "Key": key},
                 ExpiresIn=expires_in,
+                ),
             )
             return url
 
@@ -184,10 +184,7 @@ class S3Storage:
             True if exists, False otherwise
         """
         try:
-            # Run sync boto3 call in thread pool to avoid blocking event loop
-            await asyncio.to_thread(
-                self.client.head_object, Bucket=self.bucket, Key=key
-            )
+            await to_thread_limited(self.client.head_object, Bucket=self.bucket, Key=key)
             return True
         except ClientError:
             return False

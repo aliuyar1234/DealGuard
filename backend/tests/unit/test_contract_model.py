@@ -4,22 +4,22 @@ Tests the hybrid property for automatic encryption/decryption.
 """
 
 import os
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
+
 # Set required env vars
-os.environ["APP_SECRET_KEY"] = "test-secret-key-for-encryption-32chars"
+os.environ["APP_SECRET_KEY"] = "00000000000000000000000000000000"
 
 
 @pytest.fixture(autouse=True)
 def mock_crypto_settings():
     """Mock get_settings for all contract model tests."""
     with patch("dealguard.shared.crypto.get_settings") as mock:
-        mock.return_value = MagicMock(
-            app_secret_key="test-secret-key-for-encryption-32chars"
-        )
+        mock.return_value = MagicMock(app_secret_key="00000000000000000000000000000000")
         from dealguard.shared.crypto import _get_fernet
+
         _get_fernet.cache_clear()
         yield mock
         _get_fernet.cache_clear()
@@ -30,8 +30,8 @@ class TestContractTextEncryption:
 
     def test_contract_text_setter_encrypts(self):
         """Test that setting contract_text encrypts the value."""
-        from dealguard.shared.crypto import _get_fernet, is_encrypted
         from dealguard.infrastructure.database.models.contract import Contract
+        from dealguard.shared.crypto import _get_fernet, is_encrypted
 
         _get_fernet.cache_clear()
 
@@ -56,8 +56,8 @@ class TestContractTextEncryption:
 
     def test_contract_text_getter_decrypts(self):
         """Test that getting contract_text decrypts the value."""
-        from dealguard.shared.crypto import _get_fernet, encrypt_secret
         from dealguard.infrastructure.database.models.contract import Contract
+        from dealguard.shared.crypto import _get_fernet, encrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -80,8 +80,8 @@ class TestContractTextEncryption:
 
     def test_contract_text_roundtrip(self):
         """Test setting and getting contract_text preserves data."""
-        from dealguard.shared.crypto import _get_fernet
         from dealguard.infrastructure.database.models.contract import Contract
+        from dealguard.shared.crypto import _get_fernet
 
         _get_fernet.cache_clear()
 
@@ -159,8 +159,8 @@ class TestRawTextBackwardsCompatibility:
 
     def test_raw_text_getter_returns_decrypted(self):
         """Test that raw_text property returns decrypted text."""
-        from dealguard.shared.crypto import _get_fernet
         from dealguard.infrastructure.database.models.contract import Contract
+        from dealguard.shared.crypto import _get_fernet
 
         _get_fernet.cache_clear()
 
@@ -184,8 +184,8 @@ class TestRawTextBackwardsCompatibility:
 
     def test_raw_text_setter_encrypts(self):
         """Test that raw_text setter encrypts the value."""
-        from dealguard.shared.crypto import _get_fernet, is_encrypted
         from dealguard.infrastructure.database.models.contract import Contract
+        from dealguard.shared.crypto import _get_fernet, is_encrypted
 
         _get_fernet.cache_clear()
 
@@ -238,8 +238,8 @@ class TestContractTextWithLongContent:
 
     def test_long_contract_text(self):
         """Test encryption of long contract text."""
-        from dealguard.shared.crypto import _get_fernet
         from dealguard.infrastructure.database.models.contract import Contract
+        from dealguard.shared.crypto import _get_fernet
 
         _get_fernet.cache_clear()
 
@@ -265,8 +265,8 @@ class TestContractTextWithLongContent:
 
     def test_unicode_contract_text(self):
         """Test encryption of Unicode contract text."""
-        from dealguard.shared.crypto import _get_fernet
         from dealguard.infrastructure.database.models.contract import Contract
+        from dealguard.shared.crypto import _get_fernet
 
         _get_fernet.cache_clear()
 

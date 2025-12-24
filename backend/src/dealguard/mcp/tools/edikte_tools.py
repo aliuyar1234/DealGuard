@@ -159,7 +159,7 @@ Zum Zeitpunkt der Abfrage ist kein Insolvenzverfahren in der
 **{latest.verfahrensart}**
 - Aktenzeichen: {latest.aktenzeichen}
 - Gericht: {latest.gericht}
-- Eröffnet: {latest.eroeffnungsdatum or 'Unbekannt'}
+- Eröffnet: {latest.eroeffnungsdatum or "Unbekannt"}
 - Status: {latest.status}
 
 **Empfohlene Maßnahmen:**

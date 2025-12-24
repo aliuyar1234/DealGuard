@@ -1,15 +1,23 @@
 """Contract API routes."""
 
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from pydantic import BaseModel
 
 from dealguard.api.middleware.auth import CurrentUser, RequireMember
-from dealguard.api.ratelimit import limiter, RATE_LIMIT_UPLOAD, RATE_LIMIT_DEFAULT
+from dealguard.api.ratelimit import RATE_LIMIT_UPLOAD, limiter
 from dealguard.domain.contracts.services import ContractAnalysisService
-from dealguard.infrastructure.ai.cost_tracker import CostTracker
 from dealguard.infrastructure.ai.factory import get_ai_client
 from dealguard.infrastructure.database.connection import SessionDep
 from dealguard.infrastructure.database.models.contract import (
@@ -46,7 +54,7 @@ class ContractFindingResponse(BaseModel):
     title: str
     description: str
     original_clause_text: str | None
-    clause_location: dict | None
+    clause_location: dict[str, Any] | None
     suggested_change: str | None
     market_comparison: str | None
 
@@ -98,14 +106,33 @@ class UploadResponse(BaseModel):
 # ----- Dependencies -----
 
 
-async def get_contract_service(session: SessionDep) -> ContractAnalysisService:
+async def get_contract_service(
+    request: Request,
+    session: SessionDep,
+) -> ContractAnalysisService:
     """Get contract analysis service."""
+    ai_client = getattr(request.app.state, "ai_client", None)
+    if ai_client is None:
+        ai_client = get_ai_client()
+        request.app.state.ai_client = ai_client
+
+    storage = getattr(request.app.state, "s3_storage", None)
+    if storage is None:
+        storage = S3Storage()
+        request.app.state.s3_storage = storage
+
+    extractor = getattr(request.app.state, "document_extractor", None)
+    if extractor is None:
+        extractor = DocumentExtractor()
+        request.app.state.document_extractor = extractor
+
     return ContractAnalysisService(
         contract_repo=ContractRepository(session),
         analysis_repo=ContractAnalysisRepository(session),
-        ai_client=get_ai_client(CostTracker()),
-        storage=S3Storage(),
-        extractor=DocumentExtractor(),
+        ai_client=ai_client,
+        storage=storage,
+        extractor=extractor,
+        transaction=session,
     )
 
 
@@ -132,6 +159,8 @@ async def upload_contract(
     Supported formats: PDF, DOCX
     Max file size: 50 MB
     """
+    # Keep `request` in signature for SlowAPI rate limiting.
+    _ = request
     if not file.content_type:
         raise HTTPException(400, "Dateityp nicht erkannt")
 
@@ -143,14 +172,14 @@ async def upload_contract(
         mime_type=file.content_type,
         contract_type=contract_type,
         organization_id=user.organization_id,
-        user_id=user.id,
+        user_id=UUID(user.id),
     )
 
     # Queue background analysis job
     job_id = await enqueue_contract_analysis(
         contract_id=contract.id,
         organization_id=user.organization_id,
-        user_id=user.id,
+        user_id=UUID(user.id),
     )
 
     if job_id:
@@ -175,10 +204,10 @@ async def upload_contract(
 
 @router.get("/", response_model=ContractListResponse)
 async def list_contracts(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: ContractServiceDep,
-    limit: int = 20,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ContractListResponse:
     """List all contracts for the current organization."""
     contracts = await service.list_contracts(limit=limit, offset=offset)
@@ -208,7 +237,7 @@ async def list_contracts(
 @router.get("/{contract_id}", response_model=ContractResponse)
 async def get_contract(
     contract_id: UUID,
-    user: CurrentUser,
+    _user: CurrentUser,
     service: ContractServiceDep,
 ) -> ContractResponse:
     """Get contract details with analysis results."""
@@ -262,7 +291,7 @@ async def get_contract(
 @router.delete("/{contract_id}", status_code=204)
 async def delete_contract(
     contract_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     service: ContractServiceDep,
 ) -> None:
     """Delete a contract."""
@@ -275,7 +304,7 @@ async def delete_contract(
 @router.post("/{contract_id}/analyze", response_model=ContractResponse)
 async def trigger_analysis(
     contract_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     service: ContractServiceDep,
 ) -> ContractResponse:
     """Manually trigger analysis for a contract.
@@ -295,4 +324,4 @@ async def trigger_analysis(
 
     # Refresh and return
     contract = await service.get_contract(contract_id)
-    return await get_contract(contract_id, user, service)
+    return await get_contract(contract_id, _user, service)

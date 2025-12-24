@@ -8,34 +8,34 @@ This API provides a chat interface that integrates:
 
 import logging
 from datetime import UTC, datetime
-from typing import Literal
-from uuid import UUID
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.api.deps import get_current_user, get_db, get_user_settings
-from dealguard.api.ratelimit import limiter, RATE_LIMIT_AI
-from dealguard.domain.chat import ChatService, ChatMessage
+from dealguard.api.ratelimit import RATE_LIMIT_AI, limiter
+from dealguard.api.schemas import APIRequestModel
+from dealguard.domain.chat import ChatMessage, ChatService
 from dealguard.infrastructure.auth.provider import AuthUser
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat/v2", tags=["chat"])
+router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 # ----- Request/Response Models -----
 
 
-class MessageInput(BaseModel):
+class MessageInput(APIRequestModel):
     """A single message in the conversation."""
 
     role: Literal["user", "assistant"]
     content: str
 
 
-class ChatRequest(BaseModel):
+class ChatRequest(APIRequestModel):
     """Request to send a chat message."""
 
     messages: list[MessageInput] = Field(
@@ -49,7 +49,7 @@ class ToolCall(BaseModel):
     """Information about a tool that was called."""
 
     name: str
-    input: dict
+    input: dict[str, Any]
 
 
 class ToolResult(BaseModel):
@@ -74,7 +74,7 @@ class ChatResponse(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class SimpleMessageRequest(BaseModel):
+class SimpleMessageRequest(APIRequestModel):
     """Simple request with just a message."""
 
     message: str = Field(..., min_length=1, max_length=10000)
@@ -103,6 +103,8 @@ async def chat(
     - "Ist die Firma ABC GmbH insolvent?"
     - "Welche Fristen habe ich in den nächsten 30 Tagen?"
     """
+    # Keep `request` in signature for SlowAPI rate limiting.
+    _ = request
     try:
         # Get organization ID from user
         org_id = current_user.organization_id
@@ -116,8 +118,7 @@ async def chat(
 
         # Convert messages
         chat_messages = [
-            ChatMessage(role=msg.role, content=msg.content)
-            for msg in chat_request.messages
+            ChatMessage(role=msg.role, content=msg.content) for msg in chat_request.messages
         ]
 
         # Get response
@@ -125,22 +126,22 @@ async def chat(
 
         return ChatResponse(
             message=response.content,
-            tool_calls=[
-                ToolCall(name=tc["name"], input=tc["input"])
-                for tc in response.tool_calls
-            ] if response.tool_calls else None,
+            tool_calls=[ToolCall(name=tc["name"], input=tc["input"]) for tc in response.tool_calls]
+            if response.tool_calls
+            else None,
             tool_results=[
-                ToolResult(name=tr["name"], result=tr["result"])
-                for tr in response.tool_results
-            ] if response.tool_results else None,
+                ToolResult(name=tr["name"], result=tr["result"]) for tr in response.tool_results
+            ]
+            if response.tool_results
+            else None,
         )
 
     except ValueError as e:
         logger.error(f"Chat configuration error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("Chat error")
-        raise HTTPException(status_code=500, detail=f"Chat-Fehler: {str(e)}")
+        raise HTTPException(status_code=500, detail="Chat request failed")
 
 
 @router.post("/simple", response_model=ChatResponse)
@@ -156,6 +157,8 @@ async def chat_simple(
     This is a convenience endpoint for simple single-turn conversations.
     For multi-turn conversations, use the main /chat endpoint.
     """
+    # Keep `request` in signature for SlowAPI rate limiting.
+    _ = request
     try:
         org_id = current_user.organization_id
         user_id = current_user.id
@@ -165,33 +168,35 @@ async def chat_simple(
 
         service = ChatService(organization_id=org_id, user_settings=user_settings)
 
-        response = await service.chat([
-            ChatMessage(role="user", content=message_request.message),
-        ])
+        response = await service.chat(
+            [
+                ChatMessage(role="user", content=message_request.message),
+            ]
+        )
 
         return ChatResponse(
             message=response.content,
-            tool_calls=[
-                ToolCall(name=tc["name"], input=tc["input"])
-                for tc in response.tool_calls
-            ] if response.tool_calls else None,
+            tool_calls=[ToolCall(name=tc["name"], input=tc["input"]) for tc in response.tool_calls]
+            if response.tool_calls
+            else None,
             tool_results=[
-                ToolResult(name=tr["name"], result=tr["result"])
-                for tr in response.tool_results
-            ] if response.tool_results else None,
+                ToolResult(name=tr["name"], result=tr["result"]) for tr in response.tool_results
+            ]
+            if response.tool_results
+            else None,
         )
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("Simple chat error")
-        raise HTTPException(status_code=500, detail=f"Chat-Fehler: {str(e)}")
+        raise HTTPException(status_code=500, detail="Chat request failed")
 
 
 @router.get("/tools")
 async def list_tools(
     _user: AuthUser = Depends(get_current_user),
-) -> dict:
+) -> dict[str, Any]:
     """List all available tools that the AI can use.
 
     This endpoint requires authentication to prevent information leakage
@@ -204,7 +209,9 @@ async def list_tools(
         "tools": [
             {
                 "name": t["name"],
-                "description": t["description"][:200] + "..." if len(t["description"]) > 200 else t["description"],
+                "description": t["description"][:200] + "..."
+                if len(t["description"]) > 200
+                else t["description"],
             }
             for t in tools
         ],
@@ -215,7 +222,7 @@ async def list_tools(
 @router.get("/health")
 async def chat_health(
     _user: AuthUser = Depends(get_current_user),
-) -> dict:
+) -> dict[str, Any]:
     """Check if the chat service is configured correctly.
 
     Requires authentication to prevent information leakage.
@@ -231,6 +238,8 @@ async def chat_health(
     return {
         "status": "ok" if has_api_key else "missing_api_key",
         "provider": settings.ai_provider,
-        "model": settings.anthropic_model if settings.ai_provider == "anthropic" else settings.deepseek_model,
+        "model": settings.anthropic_model
+        if settings.ai_provider == "anthropic"
+        else settings.deepseek_model,
         "tools_available": len(get_tool_definitions()) if has_api_key else 0,
     }

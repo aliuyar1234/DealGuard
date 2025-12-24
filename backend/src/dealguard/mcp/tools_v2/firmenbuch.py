@@ -37,10 +37,29 @@ async def dealguard_search_companies(params: SearchFirmenbuchInput) -> str:
         - "OMV" → OMV AG und Tochtergesellschaften
     """
     try:
-        from dealguard.infrastructure.external.openfirmenbuch import OpenFirmenbuchClient
+        from dealguard.infrastructure.external.openfirmenbuch import OpenFirmenbuchProvider
 
-        client = OpenFirmenbuchClient()
-        results = await client.search(params.query, params.limit)
+        provider = OpenFirmenbuchProvider()
+        try:
+            raw_results = await provider.search_companies(
+                query=params.query,
+                country="AT",
+                limit=params.limit,
+            )
+        finally:
+            await provider.close()
+
+        results = [
+            {
+                "firmenbuchnummer": r.handelsregister_id or r.provider_id,
+                "name": r.name,
+                "rechtsform": r.legal_form,
+                "sitz": r.city,
+                "status": r.status,
+                "confidence_score": r.confidence_score,
+            }
+            for r in raw_results
+        ]
 
         if not results:
             return (
@@ -78,7 +97,7 @@ async def dealguard_search_companies(params: SearchFirmenbuchInput) -> str:
             if sitz:
                 lines.append(f"- Sitz: {sitz}")
             lines.append(
-                f"- → `dealguard_get_company_details(firmenbuchnummer=\"{fn}\")` für Details"
+                f'- → `dealguard_get_company_details(firmenbuchnummer="{fn}")` für Details'
             )
             lines.append("")
 
@@ -106,10 +125,38 @@ async def dealguard_get_company_details(params: GetFirmenbuchAuszugInput) -> str
         dealguard_get_company_details(firmenbuchnummer="123456a")
     """
     try:
-        from dealguard.infrastructure.external.openfirmenbuch import OpenFirmenbuchClient
+        from dealguard.infrastructure.external.openfirmenbuch import OpenFirmenbuchProvider
 
-        client = OpenFirmenbuchClient()
-        company = await client.get_details(params.firmenbuchnummer)
+        provider = OpenFirmenbuchProvider()
+        try:
+            company_data = await provider.search_by_fn(params.firmenbuchnummer)
+        finally:
+            await provider.close()
+
+        company = None
+        if company_data:
+            address_parts = [
+                company_data.street,
+                company_data.postal_code,
+                company_data.city,
+            ]
+            address = " ".join(p for p in address_parts if p)
+            company = {
+                "firmenbuchnummer": company_data.handelsregister_id,
+                "name": company_data.name,
+                "rechtsform": company_data.legal_form,
+                "sitz": company_data.city,
+                "adresse": address or None,
+                "stammkapital": (
+                    f"EUR {company_data.share_capital:,.2f}"
+                    if company_data.share_capital is not None
+                    else None
+                ),
+                "gruendungsdatum": company_data.founded_date,
+                "geschaeftsfuehrer": company_data.managing_directors or [],
+                "unternehmensgegenstand": company_data.business_purpose,
+                "raw_data": company_data.raw_data,
+            }
 
         if not company:
             return (
@@ -146,7 +193,7 @@ async def dealguard_get_company_details(params: GetFirmenbuchAuszugInput) -> str
                 lines.append(f"- {person}")
 
         gegenstand = company.get("unternehmensgegenstand")
-        if gegenstand:
+        if isinstance(gegenstand, str) and gegenstand:
             lines.extend(
                 [
                     "",
@@ -176,11 +223,42 @@ async def dealguard_check_company_austria(params: CheckCompanyAustriaInput) -> s
         str: Zusammenfassung der Firmendaten oder Fehlermeldung
     """
     try:
-        from dealguard.infrastructure.external.openfirmenbuch import OpenFirmenbuchClient
+        from dealguard.infrastructure.external.openfirmenbuch import OpenFirmenbuchProvider
 
-        client = OpenFirmenbuchClient()
+        provider = OpenFirmenbuchProvider()
+        try:
+            raw_results = await provider.search_companies(
+                query=params.company_name,
+                country="AT",
+                limit=1,
+            )
+            match = raw_results[0] if raw_results else None
 
-        results = await client.search(params.company_name, 1)
+            company = None
+            details = {}
+            if match:
+                fn = match.handelsregister_id or match.provider_id
+                company = {
+                    "firmenbuchnummer": fn,
+                    "name": match.name,
+                    "rechtsform": match.legal_form,
+                    "sitz": match.city,
+                }
+
+                company_data = await provider.get_company_data(match.provider_id)
+                if company_data:
+                    details = {
+                        "geschaeftsfuehrer": company_data.managing_directors or [],
+                        "stammkapital": (
+                            f"EUR {company_data.share_capital:,.2f}"
+                            if company_data.share_capital is not None
+                            else None
+                        ),
+                    }
+        finally:
+            await provider.close()
+
+        results = [company] if company else []
 
         if not results:
             return (
@@ -193,9 +271,7 @@ async def dealguard_check_company_austria(params: CheckCompanyAustriaInput) -> s
             )
 
         company = results[0]
-        fn = company.get("firmenbuchnummer", "")
-
-        details = await client.get_details(fn) if fn else {}
+        fn = str(company.get("firmenbuchnummer", ""))
 
         if params.response_format == ResponseFormat.JSON:
             return json.dumps(
@@ -212,9 +288,10 @@ async def dealguard_check_company_austria(params: CheckCompanyAustriaInput) -> s
             f"- **Sitz:** {company.get('sitz', '-')}",
         ]
 
-        if details.get("geschaeftsfuehrer"):
+        geschaeftsfuehrer = details.get("geschaeftsfuehrer")
+        if isinstance(geschaeftsfuehrer, list) and geschaeftsfuehrer:
             lines.append(
-                f"- **Geschäftsführer:** {', '.join(details['geschaeftsfuehrer'])}"
+                f"- **Geschäftsführer:** {', '.join(str(p) for p in geschaeftsfuehrer)}"
             )
 
         if details.get("stammkapital"):
@@ -225,8 +302,8 @@ async def dealguard_check_company_austria(params: CheckCompanyAustriaInput) -> s
                 "",
                 "---",
                 "**Empfohlene weitere Prüfungen:**",
-                f"- `dealguard_search_insolvency(name=\"{params.company_name}\")` → Insolvenzstatus",
-                f"- `dealguard_check_sanctions(name=\"{params.company_name}\")` → Sanktionslisten",
+                f'- `dealguard_search_insolvency(name="{params.company_name}")` → Insolvenzstatus',
+                f'- `dealguard_check_sanctions(name="{params.company_name}")` → Sanktionslisten',
             ]
         )
 

@@ -37,7 +37,7 @@ def _get_fernet() -> Fernet:
     if not secret or secret in _INSECURE_DEFAULT_KEYS:
         raise ValueError(
             "APP_SECRET_KEY muss für Verschlüsselung konfiguriert sein. "
-            "Generiere einen sicheren Key mit: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            'Generiere einen sicheren Key mit: python -c "import secrets; print(secrets.token_urlsafe(32))"'
         )
 
     # Derive a 32-byte key using SHA256

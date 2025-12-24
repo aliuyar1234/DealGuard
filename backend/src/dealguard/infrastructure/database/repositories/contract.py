@@ -1,10 +1,10 @@
 """Contract repository."""
 
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Sequence
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.orm import selectinload
 
 from dealguard.infrastructure.database.models.contract import (
@@ -13,8 +13,10 @@ from dealguard.infrastructure.database.models.contract import (
     ContractAnalysis,
     ContractFinding,
 )
+from dealguard.infrastructure.database.models.contract_search import ContractSearchToken
 from dealguard.infrastructure.database.models.organization import Organization
 from dealguard.infrastructure.database.repositories.base import BaseRepository
+from dealguard.shared.search_tokens import token_hashes_from_text
 
 
 class ContractRepository(BaseRepository[Contract]):
@@ -27,9 +29,7 @@ class ContractRepository(BaseRepository[Contract]):
         query = (
             self._base_query()
             .where(Contract.id == id)
-            .options(
-                selectinload(Contract.analysis).selectinload(ContractAnalysis.findings)
-            )
+            .options(selectinload(Contract.analysis).selectinload(ContractAnalysis.findings))
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
@@ -39,6 +39,33 @@ class ContractRepository(BaseRepository[Contract]):
         query = self._base_query().where(Contract.file_hash == file_hash)
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def replace_search_tokens(self, contract_id: UUID, contract_text: str) -> None:
+        """Replace the search token index for a contract."""
+        org_id = self._get_organization_id()
+
+        await self.session.execute(
+            delete(ContractSearchToken).where(
+                ContractSearchToken.organization_id == org_id,
+                ContractSearchToken.contract_id == contract_id,
+            )
+        )
+
+        token_hashes = token_hashes_from_text(contract_text)
+        if not token_hashes:
+            return
+
+        await self.session.execute(
+            insert(ContractSearchToken),
+            [
+                {
+                    "organization_id": org_id,
+                    "token_hash": token_hash,
+                    "contract_id": contract_id,
+                }
+                for token_hash in token_hashes
+            ],
+        )
 
     async def get_pending(self, limit: int = 10) -> Sequence[Contract]:
         """Get pending contracts for processing."""
@@ -81,9 +108,7 @@ class ContractRepository(BaseRepository[Contract]):
             Contract.created_at >= start,
             Contract.created_at < end,
         )
-        result = await self.session.execute(
-            select(func.count()).select_from(query.subquery())
-        )
+        result = await self.session.execute(select(func.count()).select_from(query.subquery()))
         return result.scalar_one()
 
     async def update_status(
@@ -143,4 +168,3 @@ class ContractAnalysisRepository(BaseRepository[ContractAnalysis]):
         await self.session.flush()
         await self.session.refresh(analysis)
         return analysis
-

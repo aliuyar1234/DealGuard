@@ -1,9 +1,10 @@
 """
 Unit tests for Partner domain (Phase 2).
 """
+
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -78,8 +79,12 @@ class TestPartnerTypes:
     def test_partner_type_values(self):
         """Test all partner type values exist."""
         expected_types = [
-            "supplier", "customer", "service_provider",
-            "distributor", "partner", "other"
+            "supplier",
+            "customer",
+            "service_provider",
+            "distributor",
+            "partner",
+            "other",
         ]
         actual_types = [t.value for t in PartnerType]
         for expected in expected_types:
@@ -96,8 +101,13 @@ class TestPartnerTypes:
     def test_check_type_values(self):
         """Test all check type values exist."""
         expected_types = [
-            "handelsregister", "credit_check", "sanctions",
-            "news", "insolvency", "esg", "manual"
+            "handelsregister",
+            "credit_check",
+            "sanctions",
+            "news",
+            "insolvency",
+            "esg",
+            "manual",
         ]
         actual_types = [t.value for t in CheckType]
         for expected in expected_types:
@@ -119,9 +129,14 @@ class TestPartnerTypes:
     def test_alert_type_values(self):
         """Test all alert type values exist."""
         expected_types = [
-            "insolvency", "management_change", "address_change",
-            "credit_downgrade", "sanction_hit", "negative_news",
-            "legal_issue", "financial_warning"
+            "insolvency",
+            "management_change",
+            "address_change",
+            "credit_downgrade",
+            "sanction_hit",
+            "negative_news",
+            "legal_issue",
+            "financial_warning",
         ]
         actual_types = [t.value for t in AlertType]
         for expected in expected_types:

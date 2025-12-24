@@ -6,14 +6,14 @@ This module provides:
 - Company Profile: Organization legal context
 """
 
-from dealguard.domain.legal.knowledge_retriever import (
-    KnowledgeRetriever,
-    ClauseContext,
-    ContractSearchResult,
-)
 from dealguard.domain.legal.company_profile import (
     CompanyProfile,
     CompanyProfileService,
+)
+from dealguard.domain.legal.knowledge_retriever import (
+    ClauseContext,
+    ContractSearchResult,
+    KnowledgeRetriever,
 )
 
 __all__ = [

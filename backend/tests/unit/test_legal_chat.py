@@ -6,11 +6,13 @@ Tests cover:
 - LegalChatService: Chat orchestration
 - Citation validation
 """
+
 import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from dealguard.shared.context import TenantContext, clear_tenant_context, set_tenant_context
 
 
@@ -40,33 +42,28 @@ class TestKnowledgeRetriever:
     def retriever(self, mock_db, tenant_context):
         """Create KnowledgeRetriever instance."""
         from dealguard.domain.legal.knowledge_retriever import KnowledgeRetriever
+
         return KnowledgeRetriever(mock_db, organization_id=tenant_context.organization_id)
 
     @pytest.mark.asyncio
     async def test_search_contracts_by_query(self, retriever, mock_db):
         """Test searching contracts by query."""
-        contracts = [
-            MagicMock(
-                id=uuid.uuid4(),
-                filename="Mietvertrag.pdf",
-                raw_text="Die Kündigungsfrist beträgt 3 Monate.",
-            )
-        ]
-        mock_db.execute.return_value = MagicMock(
-            fetchall=MagicMock(return_value=[
-                MagicMock(
-                    id=contracts[0].id,
-                    filename=contracts[0].filename,
-                    contract_type=None,
-                    raw_text=contracts[0].raw_text,
-                    relevance=0.9,
-                )
-            ])
+        contract = MagicMock(
+            id=uuid.uuid4(),
+            filename="Mietvertrag.pdf",
+            contract_type=None,
+            contract_text="Die Kündigungsfrist beträgt 3 Monate.",
         )
+        mock_db.execute.return_value = MagicMock(all=MagicMock(return_value=[(contract, 1)]))
 
-        results = await retriever.search_contracts("Kündigungsfrist", limit=5)
+        with patch(
+            "dealguard.domain.legal.knowledge_retriever.token_hashes_from_query",
+            return_value=[b"x" * 32],
+        ):
+            results = await retriever.search_contracts("Kündigungsfrist", limit=5)
 
         assert len(results) == 1
+        assert results[0].filename == "Mietvertrag.pdf"
 
     @pytest.mark.asyncio
     async def test_search_with_empty_query(self, retriever, mock_db):
@@ -79,15 +76,17 @@ class TestKnowledgeRetriever:
             )
         ]
         mock_db.execute.return_value = MagicMock(
-            fetchall=MagicMock(return_value=[
-                MagicMock(
-                    id=contracts[0].id,
-                    filename=contracts[0].filename,
-                    contract_type=None,
-                    raw_text="Some contract text.",
-                    relevance=0.5,
-                )
-            ])
+            fetchall=MagicMock(
+                return_value=[
+                    MagicMock(
+                        id=contracts[0].id,
+                        filename=contracts[0].filename,
+                        contract_type=None,
+                        raw_text="Some contract text.",
+                        relevance=0.5,
+                    )
+                ]
+            )
         )
 
         results = await retriever.get_all_contracts(limit=5)
@@ -102,26 +101,19 @@ class TestKnowledgeRetriever:
         Seite 2: Die Kündigungsfrist beträgt 3 Monate zum Quartalsende.
         Seite 3: Zahlungsbedingungen.
         """
-        contracts = [
-            MagicMock(
-                id=uuid.uuid4(),
-                filename="Mietvertrag.pdf",
-                raw_text=contract_text,
-            )
-        ]
-        mock_db.execute.return_value = MagicMock(
-            fetchall=MagicMock(return_value=[
-                MagicMock(
-                    id=contracts[0].id,
-                    filename=contracts[0].filename,
-                    contract_type=None,
-                    raw_text=contracts[0].raw_text,
-                    relevance=0.9,
-                )
-            ])
+        contract = MagicMock(
+            id=uuid.uuid4(),
+            filename="Mietvertrag.pdf",
+            contract_type=None,
+            contract_text=contract_text,
         )
+        mock_db.execute.return_value = MagicMock(all=MagicMock(return_value=[(contract, 1)]))
 
-        results = await retriever.search_contracts("Kündigungsfrist", limit=5)
+        with patch(
+            "dealguard.domain.legal.knowledge_retriever.token_hashes_from_query",
+            return_value=[b"x" * 32],
+        ):
+            results = await retriever.search_contracts("Kündigungsfrist", limit=5)
         clauses = retriever.extract_relevant_clauses(results, "Kündigungsfrist")
 
         assert clauses is not None
@@ -259,6 +251,7 @@ class TestLegalChatService:
     @pytest.mark.asyncio
     async def test_ask_question_returns_response(self, chat_service, mock_db):
         """Test asking a question returns a response."""
+        _ = mock_db
         response = await chat_service.ask_question("Was ist die Kuendigungsfrist?")
 
         assert response is not None
@@ -267,6 +260,7 @@ class TestLegalChatService:
     @pytest.mark.asyncio
     async def test_ask_includes_citations(self, chat_service, mock_db):
         """Test that response includes citations."""
+        _ = mock_db
         response = await chat_service.ask_question("Was ist die Kuendigungsfrist?")
 
         # Response should reference the contract
@@ -276,6 +270,7 @@ class TestLegalChatService:
     @pytest.mark.asyncio
     async def test_ask_returns_confidence_score(self, chat_service, mock_db):
         """Test that response includes confidence score."""
+        _ = mock_db
         response = await chat_service.ask_question("Komplexe rechtliche Frage")
 
         assert response is not None
@@ -365,9 +360,7 @@ class TestCompanyProfileService:
             }
         }
         org.name = "ACME GmbH"
-        mock_db.execute.return_value = MagicMock(
-            scalar_one_or_none=MagicMock(return_value=org)
-        )
+        mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=org))
 
         profile = await service.get_profile()
 
@@ -385,9 +378,7 @@ class TestCompanyProfileService:
         service = CompanyProfileService(mock_db, organization_id=tenant_context.organization_id)
 
         org = MagicMock(settings={})
-        mock_db.execute.return_value = MagicMock(
-            scalar_one_or_none=MagicMock(return_value=org)
-        )
+        mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=org))
         mock_db.flush = AsyncMock()
 
         profile = CompanyProfile(
@@ -420,7 +411,11 @@ class TestAntiHallucination:
 
         system_prompt = LegalAdvisorPromptV1().render_system()
         prompt_lower = system_prompt.lower()
-        assert "unsicher" in prompt_lower or "uncertain" in prompt_lower or "nicht sicher" in prompt_lower
+        assert (
+            "unsicher" in prompt_lower
+            or "uncertain" in prompt_lower
+            or "nicht sicher" in prompt_lower
+        )
 
     def test_prompt_recommends_lawyer_for_complex_cases(self):
         """Test that prompt recommends lawyers for complex cases."""
@@ -445,9 +440,7 @@ class TestLegalMessageModel:
             role="assistant",
             content="Die Kündigungsfrist beträgt 3 Monate [Mietvertrag.pdf, S. 5].",
             message_metadata={
-                "citations": [
-                    {"file": "Mietvertrag.pdf", "page": 5, "snippet": "...3 Monate..."}
-                ],
+                "citations": [{"file": "Mietvertrag.pdf", "page": 5, "snippet": "...3 Monate..."}],
                 "confidence": 0.92,
             },
         )

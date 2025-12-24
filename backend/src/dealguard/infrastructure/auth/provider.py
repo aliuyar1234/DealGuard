@@ -11,7 +11,11 @@ To switch to Clerk later:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from dealguard.shared.context import TenantContext
 
 
 @dataclass(frozen=True)
@@ -28,7 +32,7 @@ class AuthUser:
     email_verified: bool = False
     full_name: str | None = None
 
-    def to_tenant_context(self):
+    def to_tenant_context(self) -> "TenantContext":
         """Convert to TenantContext for request processing."""
         from dealguard.shared.context import TenantContext
 

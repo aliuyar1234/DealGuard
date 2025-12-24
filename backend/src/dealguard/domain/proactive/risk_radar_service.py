@@ -7,26 +7,25 @@ This service provides:
 4. Organization-wide risk score calculation
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, timedelta
-from typing import Sequence
+from datetime import date, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from dealguard.infrastructure.database.models.contract import Contract, ContractAnalysis
 from dealguard.infrastructure.database.models.partner import Partner, PartnerRiskLevel
 from dealguard.infrastructure.database.models.proactive import (
-    ContractDeadline,
-    ProactiveAlert,
-    ComplianceCheck,
-    RiskSnapshot,
-    DeadlineStatus,
-    AlertStatus,
     AlertSeverity,
+    AlertStatus,
+    ComplianceCheck,
     ComplianceStatus,
+    ContractDeadline,
+    DeadlineStatus,
+    ProactiveAlert,
+    RiskSnapshot,
 )
 from dealguard.shared.logging import get_logger
 
@@ -94,8 +93,6 @@ class RiskRadarService:
 
     async def get_risk_radar(self) -> RiskRadarResult:
         """Calculate current risk radar for the organization."""
-        org_id = self._get_organization_id()
-
         # Get all category scores
         contract_risk = await self._calculate_contract_risk()
         partner_risk = await self._calculate_partner_risk()
@@ -127,19 +124,21 @@ class RiskRadarService:
         )
 
     async def _calculate_contract_risk(self) -> RiskCategory:
-        """Calculate contract risk score."""
+        """Calculate contract risk score.
+
+        Avoids loading all contracts/analyses into memory by using aggregates.
+        """
         org_id = self._get_organization_id()
 
-        # Get contracts with their latest analysis
-        query = (
-            select(Contract)
+        total_query = (
+            select(func.count())
+            .select_from(Contract)
             .where(Contract.organization_id == org_id)
-            .options(selectinload(Contract.analysis))
+            .where(Contract.deleted_at.is_(None))
         )
-        result = await self.session.execute(query)
-        contracts = result.scalars().all()
+        total_result = await self.session.execute(total_query)
+        total = total_result.scalar() or 0
 
-        total = len(contracts)
         if total == 0:
             return RiskCategory(
                 name="Verträge",
@@ -151,22 +150,34 @@ class RiskRadarService:
                 key_issues=[],
             )
 
-        # Calculate based on risk scores (high score = high risk)
-        high_risk = 0
-        key_issues = []
+        high_risk_query = (
+            select(func.count())
+            .select_from(Contract)
+            .join(ContractAnalysis, ContractAnalysis.contract_id == Contract.id)
+            .where(Contract.organization_id == org_id)
+            .where(Contract.deleted_at.is_(None))
+            .where(ContractAnalysis.risk_score >= 70)
+        )
+        high_risk_result = await self.session.execute(high_risk_query)
+        high_risk = high_risk_result.scalar() or 0
 
-        for contract in contracts:
-            analysis = contract.analysis
-            if analysis and analysis.risk_score and analysis.risk_score >= 70:
-                high_risk += 1
-                key_issues.append(
-                    f"{contract.filename}: Risiko-Score {analysis.risk_score}"
-                )
+        top_issues_query = (
+            select(Contract.filename, ContractAnalysis.risk_score)
+            .select_from(Contract)
+            .join(ContractAnalysis, ContractAnalysis.contract_id == Contract.id)
+            .where(Contract.organization_id == org_id)
+            .where(Contract.deleted_at.is_(None))
+            .where(ContractAnalysis.risk_score >= 70)
+            .order_by(ContractAnalysis.risk_score.desc(), Contract.created_at.desc())
+            .limit(3)
+        )
+        top_issues_result = await self.session.execute(top_issues_query)
+        key_issues = [
+            f"{filename}: Risiko-Score {risk_score}"
+            for filename, risk_score in top_issues_result.all()
+        ]
 
-        # Score = percentage of high-risk contracts
-        score = int((high_risk / total) * 100) if total > 0 else 0
-
-        # Determine trend
+        score = int((high_risk / total) * 100)
         trend = await self._get_category_trend("contract_risk_score")
 
         return RiskCategory(
@@ -176,21 +187,22 @@ class RiskRadarService:
             items_at_risk=high_risk,
             total_items=total,
             trend=trend,
-            key_issues=key_issues[:3],  # Top 3 issues
+            key_issues=key_issues,
         )
 
     async def _calculate_partner_risk(self) -> RiskCategory:
-        """Calculate partner risk score."""
+        """Calculate partner risk score using aggregates."""
         org_id = self._get_organization_id()
 
-        query = (
-            select(Partner)
+        total_query = (
+            select(func.count())
+            .select_from(Partner)
             .where(Partner.organization_id == org_id)
+            .where(Partner.deleted_at.is_(None))
         )
-        result = await self.session.execute(query)
-        partners = result.scalars().all()
+        total_result = await self.session.execute(total_query)
+        total = total_result.scalar() or 0
 
-        total = len(partners)
         if total == 0:
             return RiskCategory(
                 name="Partner",
@@ -202,15 +214,28 @@ class RiskRadarService:
                 key_issues=[],
             )
 
-        high_risk = 0
-        key_issues = []
+        high_risk_query = (
+            select(func.count())
+            .select_from(Partner)
+            .where(Partner.organization_id == org_id)
+            .where(Partner.deleted_at.is_(None))
+            .where(Partner.risk_level.in_([PartnerRiskLevel.HIGH, PartnerRiskLevel.CRITICAL]))
+        )
+        high_risk_result = await self.session.execute(high_risk_query)
+        high_risk = high_risk_result.scalar() or 0
 
-        for partner in partners:
-            if partner.risk_level in (PartnerRiskLevel.HIGH, PartnerRiskLevel.CRITICAL):
-                high_risk += 1
-                key_issues.append(f"{partner.name}: {partner.risk_level.value}")
+        top_issues_query = (
+            select(Partner.name, Partner.risk_level)
+            .where(Partner.organization_id == org_id)
+            .where(Partner.deleted_at.is_(None))
+            .where(Partner.risk_level.in_([PartnerRiskLevel.HIGH, PartnerRiskLevel.CRITICAL]))
+            .order_by(Partner.risk_score.desc().nullslast(), Partner.name.asc())
+            .limit(3)
+        )
+        top_issues_result = await self.session.execute(top_issues_query)
+        key_issues = [f"{name}: {risk_level.value}" for name, risk_level in top_issues_result.all()]
 
-        score = int((high_risk / total) * 100) if total > 0 else 0
+        score = int((high_risk / total) * 100)
         trend = await self._get_category_trend("partner_risk_score")
 
         return RiskCategory(
@@ -220,68 +245,89 @@ class RiskRadarService:
             items_at_risk=high_risk,
             total_items=total,
             trend=trend,
-            key_issues=key_issues[:3],
+            key_issues=key_issues,
         )
 
     async def _calculate_compliance_risk(self) -> RiskCategory:
-        """Calculate compliance risk score."""
+        """Calculate compliance risk score using aggregates."""
         org_id = self._get_organization_id()
 
-        query = (
-            select(ComplianceCheck)
-            .where(ComplianceCheck.organization_id == org_id)
-            .where(ComplianceCheck.is_resolved == False)
-        )
-        result = await self.session.execute(query)
-        checks = result.scalars().all()
-
-        # Group by contract to get unique contracts with issues
-        contracts_with_issues: set[UUID] = set()
-        key_issues = []
-
-        for check in checks:
-            if check.status in (ComplianceStatus.NON_COMPLIANT, ComplianceStatus.WARNING):
-                contracts_with_issues.add(check.contract_id)
-                if check.status == ComplianceStatus.NON_COMPLIANT:
-                    key_issues.append(f"{check.check_type.value}: {check.title}")
-
-        # Get total contracts for percentage
-        contract_count_query = (
+        total_contracts_query = (
             select(func.count())
             .select_from(Contract)
             .where(Contract.organization_id == org_id)
+            .where(Contract.deleted_at.is_(None))
         )
-        contract_result = await self.session.execute(contract_count_query)
-        total_contracts = contract_result.scalar() or 0
+        total_contracts_result = await self.session.execute(total_contracts_query)
+        total_contracts = total_contracts_result.scalar() or 0
 
-        score = int((len(contracts_with_issues) / total_contracts) * 100) if total_contracts > 0 else 0
+        if total_contracts == 0:
+            return RiskCategory(
+                name="Compliance",
+                score=0,
+                weight=self.WEIGHTS["compliance"],
+                items_at_risk=0,
+                total_items=0,
+                trend="stable",
+                key_issues=[],
+            )
+
+        issues_contracts_query = (
+            select(func.count(func.distinct(ComplianceCheck.contract_id)))
+            .where(ComplianceCheck.organization_id == org_id)
+            .where(ComplianceCheck.is_resolved.is_(False))
+            .where(
+                ComplianceCheck.status.in_(
+                    [ComplianceStatus.NON_COMPLIANT, ComplianceStatus.WARNING]
+                )
+            )
+        )
+        issues_contracts_result = await self.session.execute(issues_contracts_query)
+        contracts_with_issues = issues_contracts_result.scalar() or 0
+
+        top_issues_query = (
+            select(ComplianceCheck.check_type, ComplianceCheck.title)
+            .where(ComplianceCheck.organization_id == org_id)
+            .where(ComplianceCheck.is_resolved.is_(False))
+            .where(ComplianceCheck.status == ComplianceStatus.NON_COMPLIANT)
+            .order_by(ComplianceCheck.checked_at.desc())
+            .limit(3)
+        )
+        top_issues_result = await self.session.execute(top_issues_query)
+        key_issues = [
+            f"{check_type.value}: {title}" for check_type, title in top_issues_result.all()
+        ]
+
+        score = int((contracts_with_issues / total_contracts) * 100)
         trend = await self._get_category_trend("compliance_score")
 
         return RiskCategory(
             name="Compliance",
             score=score,
             weight=self.WEIGHTS["compliance"],
-            items_at_risk=len(contracts_with_issues),
+            items_at_risk=contracts_with_issues,
             total_items=total_contracts,
             trend=trend,
-            key_issues=key_issues[:3],
+            key_issues=key_issues,
         )
 
     async def _calculate_deadline_risk(self) -> RiskCategory:
-        """Calculate deadline risk score."""
+        """Calculate deadline risk score using aggregates."""
         org_id = self._get_organization_id()
         today = date.today()
+        in_7_days = today + timedelta(days=7)
 
-        query = (
-            select(ContractDeadline)
+        total_query = (
+            select(func.count())
+            .select_from(ContractDeadline)
+            .join(Contract, Contract.id == ContractDeadline.contract_id)
             .where(ContractDeadline.organization_id == org_id)
             .where(ContractDeadline.status == DeadlineStatus.ACTIVE)
-            .options(selectinload(ContractDeadline.contract))
+            .where(Contract.deleted_at.is_(None))
         )
-        result = await self.session.execute(query)
-        deadlines = result.scalars().all()
+        total_result = await self.session.execute(total_query)
+        total = total_result.scalar() or 0
 
-        total = len(deadlines)
         if total == 0:
             return RiskCategory(
                 name="Fristen",
@@ -293,20 +339,59 @@ class RiskRadarService:
                 key_issues=[],
             )
 
-        urgent = 0
-        overdue = 0
+        overdue_query = (
+            select(func.count())
+            .select_from(ContractDeadline)
+            .join(Contract, Contract.id == ContractDeadline.contract_id)
+            .where(ContractDeadline.organization_id == org_id)
+            .where(ContractDeadline.status == DeadlineStatus.ACTIVE)
+            .where(ContractDeadline.deadline_date < today)
+            .where(Contract.deleted_at.is_(None))
+        )
+        overdue_result = await self.session.execute(overdue_query)
+        overdue = overdue_result.scalar() or 0
+
+        urgent_query = (
+            select(func.count())
+            .select_from(ContractDeadline)
+            .join(Contract, Contract.id == ContractDeadline.contract_id)
+            .where(ContractDeadline.organization_id == org_id)
+            .where(ContractDeadline.status == DeadlineStatus.ACTIVE)
+            .where(ContractDeadline.deadline_date >= today)
+            .where(ContractDeadline.deadline_date <= in_7_days)
+            .where(Contract.deleted_at.is_(None))
+        )
+        urgent_result = await self.session.execute(urgent_query)
+        urgent = urgent_result.scalar() or 0
+
+        top_issues_query = (
+            select(ContractDeadline.deadline_date, Contract.filename)
+            .select_from(ContractDeadline)
+            .join(Contract, Contract.id == ContractDeadline.contract_id)
+            .where(ContractDeadline.organization_id == org_id)
+            .where(ContractDeadline.status == DeadlineStatus.ACTIVE)
+            .where(Contract.deleted_at.is_(None))
+            .where(
+                (ContractDeadline.deadline_date < today)
+                | (
+                    and_(
+                        ContractDeadline.deadline_date >= today,
+                        ContractDeadline.deadline_date <= in_7_days,
+                    )
+                )
+            )
+            .order_by(ContractDeadline.deadline_date.asc())
+            .limit(3)
+        )
+        top_issues_result = await self.session.execute(top_issues_query)
         key_issues = []
-
-        for deadline in deadlines:
-            days_until = (deadline.deadline_date - today).days
+        for deadline_date, filename in top_issues_result.all():
+            days_until = (deadline_date - today).days
             if days_until < 0:
-                overdue += 1
-                key_issues.append(f"ÜBERFÄLLIG: {deadline.contract.filename}")
-            elif days_until <= 7:
-                urgent += 1
-                key_issues.append(f"{days_until} Tage: {deadline.contract.filename}")
+                key_issues.append(f"ÜBERFÄLLIG: {filename}")
+            else:
+                key_issues.append(f"{days_until} Tage: {filename}")
 
-        # Score heavily weighted towards overdue and urgent
         score = min(100, (overdue * 20) + (urgent * 10))
         trend = await self._get_category_trend("pending_deadlines")
 
@@ -317,7 +402,7 @@ class RiskRadarService:
             items_at_risk=overdue + urgent,
             total_items=total,
             trend=trend,
-            key_issues=key_issues[:3],
+            key_issues=key_issues,
         )
 
     async def _determine_overall_trend(self, current_score: int) -> str:
@@ -423,15 +508,12 @@ class RiskRadarService:
                     )
                 elif cat.name == "Fristen":
                     recommendations.append(
-                        f"⚠️ {cat.items_at_risk} dringende Fristen - "
-                        "Sofortige Aktion erforderlich"
+                        f"⚠️ {cat.items_at_risk} dringende Fristen - Sofortige Aktion erforderlich"
                     )
-            elif cat.score >= 40:
-                if cat.name == "Fristen":
-                    recommendations.append(
-                        f"📅 {cat.items_at_risk} Fristen in den nächsten Wochen - "
-                        "Kalender prüfen"
-                    )
+            elif cat.score >= 40 and cat.name == "Fristen":
+                recommendations.append(
+                    f"📅 {cat.items_at_risk} Fristen in den nächsten Wochen - Kalender prüfen"
+                )
 
         if not recommendations:
             recommendations.append("✅ Alle Risikobereiche im grünen Bereich")
@@ -483,7 +565,9 @@ class RiskRadarService:
             organization_id=org_id,
             snapshot_date=today,
             overall_risk_score=radar.overall_score,
-            contract_risk_score=next((c.score for c in radar.categories if c.name == "Verträge"), 0),
+            contract_risk_score=next(
+                (c.score for c in radar.categories if c.name == "Verträge"), 0
+            ),
             partner_risk_score=next((c.score for c in radar.categories if c.name == "Partner"), 0),
             compliance_score=next((c.score for c in radar.categories if c.name == "Compliance"), 0),
             total_contracts=contract_count,
@@ -545,6 +629,7 @@ class RiskRadarService:
             select(func.count())
             .select_from(Contract)
             .where(Contract.organization_id == org_id)
+            .where(Contract.deleted_at.is_(None))
         )
         result = await self.session.execute(query)
         return result.scalar() or 0
@@ -555,28 +640,23 @@ class RiskRadarService:
             select(func.count())
             .select_from(Partner)
             .where(Partner.organization_id == org_id)
+            .where(Partner.deleted_at.is_(None))
         )
         result = await self.session.execute(query)
         return result.scalar() or 0
 
     async def _get_high_risk_contract_count(self) -> int:
         org_id = self._get_organization_id()
-        # Subquery to get latest analysis per contract
         query = (
-            select(Contract)
+            select(func.count())
+            .select_from(Contract)
+            .join(ContractAnalysis, ContractAnalysis.contract_id == Contract.id)
             .where(Contract.organization_id == org_id)
-            .options(selectinload(Contract.analyses))
+            .where(Contract.deleted_at.is_(None))
+            .where(ContractAnalysis.risk_score >= 70)
         )
         result = await self.session.execute(query)
-        contracts = result.scalars().all()
-
-        count = 0
-        for contract in contracts:
-            if contract.analyses:
-                latest = max(contract.analyses, key=lambda a: a.created_at)
-                if latest.risk_score and latest.risk_score >= 70:
-                    count += 1
-        return count
+        return result.scalar() or 0
 
     async def _get_high_risk_partner_count(self) -> int:
         org_id = self._get_organization_id()
@@ -584,6 +664,7 @@ class RiskRadarService:
             select(func.count())
             .select_from(Partner)
             .where(Partner.organization_id == org_id)
+            .where(Partner.deleted_at.is_(None))
             .where(Partner.risk_level.in_([PartnerRiskLevel.HIGH, PartnerRiskLevel.CRITICAL]))
         )
         result = await self.session.execute(query)
@@ -595,9 +676,11 @@ class RiskRadarService:
             select(func.count())
             .select_from(ProactiveAlert)
             .where(ProactiveAlert.organization_id == org_id)
-            .where(ProactiveAlert.status.in_([
-                AlertStatus.NEW, AlertStatus.SEEN, AlertStatus.IN_PROGRESS
-            ]))
+            .where(
+                ProactiveAlert.status.in_(
+                    [AlertStatus.NEW, AlertStatus.SEEN, AlertStatus.IN_PROGRESS]
+                )
+            )
         )
         result = await self.session.execute(query)
         return result.scalar() or 0

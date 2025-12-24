@@ -8,15 +8,13 @@ Data is extracted from official Austrian Firmenbuch announcements.
 """
 
 import logging
-from datetime import datetime
-from typing import Any
 
 import httpx
 
 from dealguard.infrastructure.external.base import (
+    CompanyData,
     CompanyDataProvider,
     CompanySearchResult,
-    CompanyData,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,9 +173,18 @@ class OpenFirmenbuchProvider(CompanyDataProvider):
                 registration_court=company.get("firmenbuchgericht", "Handelsgericht Wien"),
                 registration_date=company.get("eintragungsdatum"),
                 # Address
-                street=company.get("adresse", {}).get("strasse") if isinstance(company.get("adresse"), dict) else None,
-                postal_code=company.get("adresse", {}).get("plz") if isinstance(company.get("adresse"), dict) else None,
-                city=company.get("sitz", company.get("adresse", {}).get("ort") if isinstance(company.get("adresse"), dict) else None),
+                street=company.get("adresse", {}).get("strasse")
+                if isinstance(company.get("adresse"), dict)
+                else None,
+                postal_code=company.get("adresse", {}).get("plz")
+                if isinstance(company.get("adresse"), dict)
+                else None,
+                city=company.get(
+                    "sitz",
+                    company.get("adresse", {}).get("ort")
+                    if isinstance(company.get("adresse"), dict)
+                    else None,
+                ),
                 country="AT",
                 # Capital
                 share_capital=self._parse_capital(company.get("stammkapital")),

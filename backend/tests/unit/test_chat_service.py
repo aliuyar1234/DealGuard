@@ -4,9 +4,10 @@ Tests both Anthropic and DeepSeek client integration.
 """
 
 import os
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
+
+import pytest
 
 # Set required env vars
 os.environ["APP_SECRET_KEY"] = "test-secret-key-for-encryption-32chars"
@@ -34,6 +35,7 @@ class TestChatServiceInitialization:
 
             assert service.ai_provider == "anthropic"
             from dealguard.domain.chat.anthropic_handler import AnthropicHandler
+
             assert isinstance(service.handler, AnthropicHandler)
 
     def test_init_deepseek_provider(self):
@@ -56,6 +58,7 @@ class TestChatServiceInitialization:
 
             assert service.ai_provider == "deepseek"
             from dealguard.domain.chat.deepseek_handler import DeepSeekHandler
+
             assert isinstance(service.handler, DeepSeekHandler)
 
     def test_init_missing_anthropic_key_raises(self):

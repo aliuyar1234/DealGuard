@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import anthropic
+from anthropic.types import TextBlock
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from dealguard.config import get_settings
@@ -49,6 +50,10 @@ class AnthropicClient:
         self.default_model = settings.anthropic_model
         self.default_max_tokens = settings.anthropic_max_tokens
         self.cost_tracker = cost_tracker or CostTracker()
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self.client.close()
 
     @retry(
         stop=stop_after_attempt(3),
@@ -115,8 +120,11 @@ class AnthropicClient:
                 latency_ms=round(latency_ms, 2),
             )
 
+            content = "".join(
+                block.text for block in response.content if isinstance(block, TextBlock)
+            )
             return AIResponse(
-                content=response.content[0].text,
+                content=content,
                 model=model,
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,

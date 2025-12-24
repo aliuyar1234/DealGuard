@@ -33,7 +33,7 @@ async def test_chat_service_tool_calling_deepseek():
             ]
 
             with patch("dealguard.domain.chat.service_v2.AsyncOpenAI"):
-                from dealguard.domain.chat.service_v2 import ChatService, ChatMessage
+                from dealguard.domain.chat.service_v2 import ChatMessage, ChatService
 
                 service = ChatService(
                     organization_id=uuid4(),
@@ -85,13 +85,9 @@ async def test_chat_service_tool_calling_deepseek():
                     usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3),
                 )
 
-                service.handler.call_api = AsyncMock(
-                    side_effect=[first_response, second_response]
-                )
+                service.handler.call_api = AsyncMock(side_effect=[first_response, second_response])
 
-                result = await service.chat(
-                    [ChatMessage(role="user", content="Test")]
-                )
+                result = await service.chat([ChatMessage(role="user", content="Test")])
 
                 assert result.content == "Final answer"
                 assert result.tool_calls == [

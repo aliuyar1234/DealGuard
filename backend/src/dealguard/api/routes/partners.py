@@ -3,36 +3,33 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from dealguard.api.middleware.auth import CurrentUser, RequireMember
-from dealguard.config import Settings, get_settings
-from dealguard.domain.partners.services import PartnerService
+from dealguard.api.schemas import APIRequestModel
+from dealguard.config import get_settings
 from dealguard.domain.partners.check_service import PartnerCheckService
+from dealguard.domain.partners.services import PartnerService
 from dealguard.infrastructure.database.connection import SessionDep
-from dealguard.infrastructure.external.mock_provider import (
-    MockCompanyProvider,
-    MockCreditProvider,
-    MockSanctionProvider,
-    MockInsolvencyProvider,
-)
-from dealguard.infrastructure.external.openfirmenbuch import OpenFirmenbuchProvider
-from dealguard.infrastructure.external.opensanctions import OpenSanctionsProvider
 from dealguard.infrastructure.database.models.partner import (
-    PartnerType,
-    PartnerRiskLevel,
-    CheckType,
-    CheckStatus,
     AlertSeverity,
     AlertType,
+    CheckStatus,
+    CheckType,
+    Partner,
+    PartnerAlert,
+    PartnerCheck,
+    PartnerRiskLevel,
+    PartnerType,
 )
 from dealguard.infrastructure.database.repositories.partner import (
-    PartnerRepository,
-    PartnerCheckRepository,
-    PartnerAlertRepository,
     ContractPartnerRepository,
+    PartnerAlertRepository,
+    PartnerCheckRepository,
+    PartnerRepository,
 )
+from dealguard.infrastructure.external.factory import build_partner_providers, get_provider
 from dealguard.shared.exceptions import NotFoundError, ValidationError
 from dealguard.shared.logging import get_logger
 
@@ -44,7 +41,7 @@ router = APIRouter(prefix="/partners", tags=["Partners"])
 # ----- Request/Response Schemas -----
 
 
-class PartnerCreateRequest(BaseModel):
+class PartnerCreateRequest(APIRequestModel):
     """Create partner request."""
 
     name: str = Field(..., min_length=1, max_length=255)
@@ -62,7 +59,7 @@ class PartnerCreateRequest(BaseModel):
     notes: str | None = None
 
 
-class PartnerUpdateRequest(BaseModel):
+class PartnerUpdateRequest(APIRequestModel):
     """Update partner request."""
 
     name: str | None = None
@@ -157,10 +154,10 @@ class PartnerListResponse(BaseModel):
     offset: int
 
 
-class LinkContractRequest(BaseModel):
+class LinkContractRequest(APIRequestModel):
     """Link contract to partner request."""
 
-    contract_id: str
+    contract_id: UUID
     role: str | None = None
     notes: str | None = None
 
@@ -187,17 +184,23 @@ async def get_partner_service(session: SessionDep) -> PartnerService:
 PartnerServiceDep = Annotated[PartnerService, Depends(get_partner_service)]
 
 
-async def get_partner_check_service(session: SessionDep) -> PartnerCheckService:
+async def get_partner_check_service(
+    request: Request,
+    session: SessionDep,
+) -> PartnerCheckService:
     """Get partner check service with providers based on environment."""
     settings = get_settings()
-    providers = _build_partner_providers(settings)
+    providers = getattr(request.app.state, "partner_providers", None)
+    if providers is None:
+        providers = build_partner_providers(settings)
+        request.app.state.partner_providers = providers
     return PartnerCheckService(
         partner_repo=PartnerRepository(session),
         check_repo=PartnerCheckRepository(session),
-        company_provider=providers["company_provider"],
-        credit_provider=providers["credit_provider"],
-        sanction_provider=providers["sanction_provider"],
-        insolvency_provider=providers["insolvency_provider"],
+        company_provider=get_provider(providers, "company_provider"),
+        credit_provider=get_provider(providers, "credit_provider"),
+        sanction_provider=get_provider(providers, "sanction_provider"),
+        insolvency_provider=get_provider(providers, "insolvency_provider"),
     )
 
 
@@ -207,24 +210,7 @@ PartnerCheckServiceDep = Annotated[PartnerCheckService, Depends(get_partner_chec
 # ----- Helper Functions -----
 
 
-def _build_partner_providers(settings: Settings) -> dict[str, object]:
-    if settings.is_development:
-        return {
-            "company_provider": MockCompanyProvider(),
-            "credit_provider": MockCreditProvider(),
-            "sanction_provider": MockSanctionProvider(),
-            "insolvency_provider": MockInsolvencyProvider(),
-        }
-
-    return {
-        "company_provider": OpenFirmenbuchProvider(),
-        "credit_provider": MockCreditProvider(),
-        "sanction_provider": OpenSanctionsProvider(),
-        "insolvency_provider": MockInsolvencyProvider(),
-    }
-
-
-def _check_to_response(check) -> PartnerCheckResponse:
+def _check_to_response(check: PartnerCheck) -> PartnerCheckResponse:
     """Convert PartnerCheck model to response."""
     return PartnerCheckResponse(
         id=str(check.id),
@@ -238,7 +224,7 @@ def _check_to_response(check) -> PartnerCheckResponse:
     )
 
 
-def _alert_to_response(alert) -> PartnerAlertResponse:
+def _alert_to_response(alert: PartnerAlert) -> PartnerAlertResponse:
     """Convert PartnerAlert model to response."""
     return PartnerAlertResponse(
         id=str(alert.id),
@@ -254,7 +240,7 @@ def _alert_to_response(alert) -> PartnerAlertResponse:
     )
 
 
-def _partner_to_response(partner, include_details: bool = False) -> PartnerResponse:
+def _partner_to_response(partner: Partner, include_details: bool = False) -> PartnerResponse:
     """Convert Partner model to response."""
     response = PartnerResponse(
         id=str(partner.id),
@@ -280,15 +266,15 @@ def _partner_to_response(partner, include_details: bool = False) -> PartnerRespo
 
     if include_details:
         # Add checks
-        if hasattr(partner, 'checks') and partner.checks:
+        if hasattr(partner, "checks") and partner.checks:
             response.checks = [_check_to_response(c) for c in partner.checks[:10]]
 
         # Add alerts
-        if hasattr(partner, 'alerts') and partner.alerts:
+        if hasattr(partner, "alerts") and partner.alerts:
             response.alerts = [_alert_to_response(a) for a in partner.alerts[:10]]
 
         # Add contract links
-        if hasattr(partner, 'contract_links') and partner.contract_links:
+        if hasattr(partner, "contract_links") and partner.contract_links:
             response.contracts = [
                 ContractLinkResponse(
                     id=str(cl.id),
@@ -317,7 +303,7 @@ async def create_partner(
     partner = await service.create_partner(
         name=request.name,
         partner_type=request.partner_type,
-        created_by=user.id,
+        created_by=UUID(user.id),
         handelsregister_id=request.handelsregister_id,
         tax_id=request.tax_id,
         vat_id=request.vat_id,
@@ -335,7 +321,7 @@ async def create_partner(
 
 @router.get("/", response_model=PartnerListResponse)
 async def list_partners(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: PartnerServiceDep,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -354,7 +340,7 @@ async def list_partners(
 
 @router.get("/search", response_model=list[PartnerResponse])
 async def search_partners(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: PartnerServiceDep,
     q: str = Query(..., min_length=2, description="Search query"),
     limit: int = Query(20, ge=1, le=50),
@@ -366,27 +352,31 @@ async def search_partners(
 
 @router.get("/high-risk", response_model=list[PartnerResponse])
 async def get_high_risk_partners(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: PartnerServiceDep,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> list[PartnerResponse]:
     """Get all high-risk partners."""
-    partners = await service.get_high_risk_partners()
+    partners = await service.get_high_risk_partners(limit=limit, offset=offset)
     return [_partner_to_response(p) for p in partners]
 
 
 @router.get("/watched", response_model=list[PartnerResponse])
 async def get_watched_partners(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: PartnerServiceDep,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ) -> list[PartnerResponse]:
     """Get all watched partners."""
-    partners = await service.get_watched_partners()
+    partners = await service.get_watched_partners(limit=limit, offset=offset)
     return [_partner_to_response(p) for p in partners]
 
 
 @router.get("/alerts/count", response_model=AlertCountResponse)
 async def get_alert_count(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: PartnerServiceDep,
 ) -> AlertCountResponse:
     """Get count of unread alerts."""
@@ -396,7 +386,7 @@ async def get_alert_count(
 
 @router.get("/alerts", response_model=list[PartnerAlertResponse])
 async def get_all_alerts(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: PartnerServiceDep,
 ) -> list[PartnerAlertResponse]:
     """Get all unread alerts for the organization."""
@@ -407,7 +397,7 @@ async def get_all_alerts(
 @router.get("/{partner_id}", response_model=PartnerResponse)
 async def get_partner(
     partner_id: UUID,
-    user: CurrentUser,
+    _user: CurrentUser,
     service: PartnerServiceDep,
 ) -> PartnerResponse:
     """Get partner details with checks, alerts, and contracts."""
@@ -420,7 +410,7 @@ async def get_partner(
 @router.patch("/{partner_id}", response_model=PartnerResponse)
 async def update_partner(
     partner_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     service: PartnerServiceDep,
     request: PartnerUpdateRequest,
 ) -> PartnerResponse:
@@ -451,7 +441,7 @@ async def update_partner(
 @router.delete("/{partner_id}", status_code=204)
 async def delete_partner(
     partner_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     service: PartnerServiceDep,
 ) -> None:
     """Delete a partner."""
@@ -464,7 +454,7 @@ async def delete_partner(
 @router.post("/{partner_id}/contracts", response_model=ContractLinkResponse, status_code=201)
 async def link_contract(
     partner_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     service: PartnerServiceDep,
     request: LinkContractRequest,
 ) -> ContractLinkResponse:
@@ -472,7 +462,7 @@ async def link_contract(
     try:
         link = await service.link_to_contract(
             partner_id=partner_id,
-            contract_id=UUID(request.contract_id),
+            contract_id=request.contract_id,
             role=request.role,
             notes=request.notes,
         )
@@ -485,15 +475,15 @@ async def link_contract(
         )
     except NotFoundError:
         raise HTTPException(404, "Partner nicht gefunden")
-    except ValidationError as e:
-        raise HTTPException(400, str(e))
+    except ValidationError:
+        raise
 
 
 @router.delete("/{partner_id}/contracts/{contract_id}", status_code=204)
 async def unlink_contract(
     partner_id: UUID,
     contract_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     service: PartnerServiceDep,
 ) -> None:
     """Unlink a contract from this partner."""
@@ -505,7 +495,7 @@ async def unlink_contract(
 @router.post("/{partner_id}/recalculate-risk", response_model=PartnerResponse)
 async def recalculate_risk(
     partner_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     service: PartnerServiceDep,
 ) -> PartnerResponse:
     """Recalculate partner's risk score from available checks."""
@@ -519,7 +509,7 @@ async def recalculate_risk(
 @router.post("/{partner_id}/run-checks", response_model=list[PartnerCheckResponse])
 async def run_all_checks(
     partner_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     check_service: PartnerCheckServiceDep,
     service: PartnerServiceDep,
 ) -> list[PartnerCheckResponse]:
@@ -542,7 +532,7 @@ async def run_all_checks(
 @router.post("/alerts/{alert_id}/read", response_model=PartnerAlertResponse)
 async def mark_alert_read(
     alert_id: UUID,
-    user: CurrentUser,
+    _user: CurrentUser,
     service: PartnerServiceDep,
 ) -> PartnerAlertResponse:
     """Mark an alert as read."""
@@ -561,7 +551,7 @@ async def dismiss_alert(
 ) -> PartnerAlertResponse:
     """Dismiss an alert."""
     try:
-        alert = await service.dismiss_alert(alert_id, dismissed_by=user.id)
+        alert = await service.dismiss_alert(alert_id, dismissed_by=UUID(user.id))
         return _alert_to_response(alert)
     except NotFoundError:
         raise HTTPException(404, "Alert nicht gefunden")

@@ -7,29 +7,27 @@ This is the main service that:
 4. Stores conversations and messages
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Sequence
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from dealguard.domain.legal.company_profile import (
+    CompanyProfileService,
+)
 from dealguard.domain.legal.knowledge_retriever import (
     KnowledgeRetriever,
-    ClauseContext,
-)
-from dealguard.domain.legal.company_profile import (
-    CompanyProfile,
-    CompanyProfileService,
 )
 from dealguard.infrastructure.ai.factory import get_ai_client
 from dealguard.infrastructure.ai.prompts.legal_advisor_v1 import (
-    LegalAdvisorPromptV1,
-    LegalAdvisorResponse,
-    ClauseInput,
     NO_CONTRACTS_RESPONSE,
+    ClauseInput,
+    LegalAdvisorPromptV1,
 )
 from dealguard.infrastructure.database.models.legal_chat import (
     LegalConversation,
@@ -48,7 +46,7 @@ class ChatResponse:
     conversation_id: UUID
     message_id: UUID
     answer: str
-    citations: list[dict]
+    citations: list[dict[str, Any]]
     confidence: float
     requires_lawyer: bool
     follow_up_questions: list[str]
@@ -153,6 +151,7 @@ class LegalChatService:
     async def count_conversations(self) -> int:
         """Count total conversations for the current organization."""
         from sqlalchemy import func
+
         query = (
             select(func.count(LegalConversation.id))
             .where(LegalConversation.organization_id == self._get_organization_id())
@@ -170,7 +169,7 @@ class LegalChatService:
         if not conversation:
             return False
 
-        conversation.deleted_at = datetime.now(timezone.utc)
+        conversation.deleted_at = datetime.now(UTC)
         await self.session.flush()
 
         logger.info(
@@ -201,7 +200,6 @@ class LegalChatService:
             ChatResponse with answer, citations, and metadata
         """
         org_id = self._get_organization_id()
-        user_id = self._get_user_id()
 
         # Get or create conversation
         if conversation_id:
@@ -212,7 +210,7 @@ class LegalChatService:
             conversation = await self.create_conversation()
 
         # Save user message
-        user_message = await self._save_message(
+        await self._save_message(
             conversation_id=conversation.id,
             role=MessageRole.USER,
             content=question,
@@ -227,9 +225,7 @@ class LegalChatService:
         #                  RAG: RETRIEVE CONTEXT
         # ─────────────────────────────────────────────────────────
 
-        clauses, search_query = await self.knowledge_retriever.build_context_for_question(
-            question
-        )
+        clauses, search_query = await self.knowledge_retriever.build_context_for_question(question)
 
         # If no contracts found, return early with helpful message
         if not clauses:
@@ -307,6 +303,9 @@ class LegalChatService:
             conversation_id=str(conversation.id),
         )
 
+        # Release the DB connection before long-running network I/O (AI call).
+        await self.session.commit()
+
         ai_response = await self.ai_client.complete(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -356,7 +355,7 @@ class LegalChatService:
         )
 
         # Update conversation timestamp
-        conversation.updated_at = datetime.now(timezone.utc)
+        conversation.updated_at = datetime.now(UTC)
         await self.session.flush()
 
         logger.info(
@@ -391,7 +390,7 @@ class LegalChatService:
         conversation_id: UUID,
         role: MessageRole,
         content: str,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cost_cents: float | None = None,
@@ -407,7 +406,7 @@ class LegalChatService:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_cents=cost_cents,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         self.session.add(message)
         await self.session.flush()
@@ -417,7 +416,7 @@ class LegalChatService:
         self,
         conversation_id: UUID,
         limit: int = 6,
-    ) -> list[dict]:
+    ) -> list[dict[str, str]]:
         """Get recent conversation history for context."""
         query = (
             select(LegalMessage)
@@ -431,10 +430,7 @@ class LegalChatService:
         # Reverse to get chronological order
         messages = list(reversed(messages))
 
-        return [
-            {"role": msg.role.value, "content": msg.content}
-            for msg in messages
-        ]
+        return [{"role": msg.role.value, "content": msg.content} for msg in messages]
 
     def _generate_title(self, question: str) -> str:
         """Generate a title from the first question."""

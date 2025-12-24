@@ -12,33 +12,61 @@ For the MCP Server, it needs to be provided via environment or configuration.
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
+from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import selectinload
+
+from dealguard.config import get_settings
+from dealguard.shared.search_tokens import token_hashes_from_query
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class DbToolContext:
     """Explicit database context for MCP DB tools."""
 
-    session_factory: sessionmaker
+    session_factory: async_sessionmaker[AsyncSession]
     organization_id: UUID
 
 
-def build_db_tool_context(database_url: str, organization_id: UUID) -> DbToolContext:
-    """Build a DbToolContext with its own engine/session factory."""
-    engine = create_async_engine(database_url)
-    session_factory = sessionmaker(
+@lru_cache(maxsize=4)
+def _get_engine(database_url: str) -> AsyncEngine:
+    settings = get_settings()
+    return create_async_engine(
+        database_url,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+        pool_pre_ping=True,
+    )
+
+
+@lru_cache(maxsize=4)
+def _get_session_factory(database_url: str) -> async_sessionmaker[AsyncSession]:
+    engine = _get_engine(database_url)
+    return async_sessionmaker(
         engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    return DbToolContext(session_factory=session_factory, organization_id=organization_id)
+
+
+def build_db_tool_context(database_url: str, organization_id: UUID) -> DbToolContext:
+    """Build a DbToolContext with its own engine/session factory."""
+    return DbToolContext(
+        session_factory=_get_session_factory(database_url),
+        organization_id=organization_id,
+    )
 
 
 def _format_contract(contract: dict[str, Any]) -> str:
@@ -82,8 +110,11 @@ def _format_partner(partner: dict[str, Any]) -> str:
     if partner.get("risk_score") is not None:
         lines.append(f"**Score:** {partner['risk_score']}/100")
 
-    if partner.get("registration_number"):
-        lines.append(f"- FN: {partner['registration_number']}")
+    if partner.get("handelsregister_id"):
+        lines.append(f"- Handelsregister: {partner['handelsregister_id']}")
+
+    if partner.get("vat_id"):
+        lines.append(f"- USt-IdNr: {partner['vat_id']}")
 
     if partner.get("country"):
         lines.append(f"- Land: {partner['country']}")
@@ -138,8 +169,6 @@ async def search_contracts(
 ) -> str:
     """Search contracts by keyword.
 
-    Uses PostgreSQL full-text search on contract content and filenames.
-
     Args:
         query: Search terms
         contract_type: Optional filter by type
@@ -151,36 +180,78 @@ async def search_contracts(
 
     try:
         async with ctx.session_factory() as session:
-            # Build query with full-text search
-            # Using to_tsvector and to_tsquery for PostgreSQL FTS
-            sql = text("""
-                SELECT
-                    c.id,
-                    c.filename,
-                    c.contract_type,
-                    c.status,
-                    c.created_at,
-                    a.risk_score,
-                    a.summary
-                FROM contracts c
-                LEFT JOIN contract_analyses a ON c.id = a.contract_id
-                WHERE c.organization_id = :org_id
-                  AND c.deleted_at IS NULL
-                  AND (
-                      c.filename ILIKE :pattern
-                      OR c.raw_text ILIKE :pattern
-                      OR a.summary ILIKE :pattern
-                  )
-                ORDER BY c.created_at DESC
-                LIMIT :limit
-            """)
+            from dealguard.infrastructure.database.models.contract import Contract, ContractAnalysis
+            from dealguard.infrastructure.database.models.contract_search import ContractSearchToken
 
-            pattern = f"%{query}%"
-            result = await session.execute(
-                sql,
-                {"org_id": str(org_id), "pattern": pattern, "limit": limit},
-            )
-            contracts = [dict(row._mapping) for row in result.fetchall()]
+            token_hashes = token_hashes_from_query(query)
+
+            # Primary path: hashed token index (scales, works with encrypted text)
+            contracts: list[dict[str, Any]] = []
+            if token_hashes:
+                matches = (
+                    select(
+                        ContractSearchToken.contract_id.label("contract_id"),
+                        func.count().label("match_count"),
+                    )
+                    .where(ContractSearchToken.organization_id == org_id)
+                    .where(ContractSearchToken.token_hash.in_(token_hashes))
+                    .group_by(ContractSearchToken.contract_id)
+                    .subquery()
+                )
+
+                stmt = (
+                    select(
+                        Contract.id,
+                        Contract.filename,
+                        Contract.contract_type,
+                        Contract.status,
+                        Contract.created_at,
+                        ContractAnalysis.risk_score,
+                        ContractAnalysis.summary,
+                    )
+                    .select_from(Contract)
+                    .join(matches, Contract.id == matches.c.contract_id)
+                    .outerjoin(ContractAnalysis, ContractAnalysis.contract_id == Contract.id)
+                    .where(Contract.organization_id == org_id)
+                    .where(Contract.deleted_at.is_(None))
+                    .order_by(matches.c.match_count.desc(), Contract.created_at.desc())
+                    .limit(limit)
+                )
+                if contract_type:
+                    stmt = stmt.where(Contract.contract_type == contract_type)
+
+                result = await session.execute(stmt)
+                contracts = [dict(row._mapping) for row in result.all()]
+
+            # Fallback: filename + summary substring search (avoid encrypted raw_text)
+            if not contracts:
+                pattern = f"%{query}%"
+                fallback = (
+                    select(
+                        Contract.id,
+                        Contract.filename,
+                        Contract.contract_type,
+                        Contract.status,
+                        Contract.created_at,
+                        ContractAnalysis.risk_score,
+                        ContractAnalysis.summary,
+                    )
+                    .select_from(Contract)
+                    .outerjoin(ContractAnalysis, ContractAnalysis.contract_id == Contract.id)
+                    .where(Contract.organization_id == org_id)
+                    .where(Contract.deleted_at.is_(None))
+                    .where(
+                        (Contract.filename.ilike(pattern))
+                        | (ContractAnalysis.summary.ilike(pattern))
+                    )
+                    .order_by(Contract.created_at.desc())
+                    .limit(limit)
+                )
+                if contract_type:
+                    fallback = fallback.where(Contract.contract_type == contract_type)
+
+                result = await session.execute(fallback)
+                contracts = [dict(row._mapping) for row in result.all()]
 
             if not contracts:
                 return f"Keine Verträge gefunden für: {query}"
@@ -223,125 +294,94 @@ async def get_contract(
 
     try:
         async with ctx.session_factory() as session:
-            # Get contract with analysis
-            sql = text("""
-                SELECT
-                    c.id,
-                    c.filename,
-                    c.file_type,
-                    c.contract_type,
-                    c.status,
-                    c.raw_text,
-                    c.page_count,
-                    c.created_at,
-                    a.risk_score,
-                    a.summary,
-                    a.key_dates,
-                    a.parties,
-                    a.recommendations
-                FROM contracts c
-                LEFT JOIN contract_analyses a ON c.id = a.contract_id
-                WHERE c.id = :contract_id
-                  AND c.organization_id = :org_id
-                  AND c.deleted_at IS NULL
-            """)
-
-            result = await session.execute(
-                sql,
-                {"contract_id": str(contract_uuid), "org_id": str(org_id)},
+            from dealguard.infrastructure.database.models.contract import (
+                Contract,
+                ContractAnalysis,
             )
-            row = result.fetchone()
 
-            if row is None:
+            query = (
+                select(Contract)
+                .where(Contract.id == contract_uuid)
+                .where(Contract.organization_id == org_id)
+                .where(Contract.deleted_at.is_(None))
+                .options(selectinload(Contract.analysis).selectinload(ContractAnalysis.findings))
+            )
+            result = await session.execute(query)
+            contract = result.scalar_one_or_none()
+
+            if contract is None:
                 return f"Vertrag nicht gefunden: {contract_id}"
 
-            c = dict(row._mapping)
+            analysis = contract.analysis
+            contract_text = contract.contract_text
 
-            # Get findings
-            findings_sql = text("""
-                SELECT
-                    f.finding_type,
-                    f.severity,
-                    f.title,
-                    f.description,
-                    f.clause_text,
-                    f.recommendation
-                FROM contract_findings f
-                JOIN contract_analyses a ON f.analysis_id = a.id
-                WHERE a.contract_id = :contract_id
-                  AND a.organization_id = :org_id
-                ORDER BY
-                    CASE f.severity
-                        WHEN 'critical' THEN 1
-                        WHEN 'high' THEN 2
-                        WHEN 'medium' THEN 3
-                        WHEN 'low' THEN 4
-                        ELSE 5
-                    END
-            """)
+            contract_type = contract.contract_type.value if contract.contract_type else None
+            status = contract.status.value if hasattr(contract.status, "value") else contract.status
 
-            findings_result = await session.execute(
-                findings_sql,
-                {"contract_id": str(contract_uuid), "org_id": str(org_id)},
-            )
-            findings = [dict(row._mapping) for row in findings_result.fetchall()]
-
-            # Format output
             output = [
-                f"# {c['filename']}",
+                f"# {contract.filename}",
                 "",
-                f"**Typ:** {c.get('contract_type', 'Unbekannt')}",
-                f"**Status:** {c.get('status', '')}",
-                f"**Seiten:** {c.get('page_count', 'Unbekannt')}",
-                f"**Hochgeladen:** {c.get('created_at', '')}",
+                f"**Typ:** {contract_type or 'Unbekannt'}",
+                f"**Status:** {status or ''}",
+                f"**Seiten:** {contract.page_count or 'Unbekannt'}",
+                f"**Hochgeladen:** {contract.created_at.isoformat() if contract.created_at else ''}",
             ]
 
-            if c.get("risk_score") is not None:
-                score = c["risk_score"]
+            if analysis and analysis.risk_score is not None:
+                score = analysis.risk_score
                 emoji = "🟢" if score < 30 else "🟡" if score < 60 else "🟠" if score < 80 else "🔴"
                 output.append(f"**Risiko:** {emoji} {score}/100")
 
-            if c.get("summary"):
+            if analysis and analysis.summary:
                 output.append("")
                 output.append("## Zusammenfassung")
-                output.append(c["summary"])
+                output.append(analysis.summary)
 
-            if c.get("parties"):
-                output.append("")
-                output.append("## Parteien")
-                parties = c["parties"] if isinstance(c["parties"], list) else []
-                for party in parties:
-                    output.append(f"- {party}")
-
-            if findings:
+            if analysis and analysis.findings:
                 output.append("")
                 output.append("## Erkenntnisse")
-                for f in findings:
+                for finding in analysis.findings:
+                    severity = (
+                        finding.severity.value
+                        if hasattr(finding.severity, "value")
+                        else str(finding.severity)
+                    )
                     severity_emoji = {
                         "critical": "🔴",
                         "high": "🟠",
                         "medium": "🟡",
                         "low": "🟢",
-                    }.get(f.get("severity", ""), "⚪")
+                        "info": "⚪",
+                    }.get(severity, "⚪")
 
-                    output.append(f"\n### {severity_emoji} {f.get('title', 'Unbekannt')}")
-                    output.append(f"*{f.get('finding_type', '')} - {f.get('severity', '')}*")
+                    category = (
+                        finding.category.value
+                        if hasattr(finding.category, "value")
+                        else str(finding.category)
+                    )
 
-                    if f.get("description"):
-                        output.append(f.get("description"))
+                    output.append(f"\n### {severity_emoji} {finding.title}")
+                    output.append(f"*{category} - {severity}*")
+                    output.append(finding.description)
 
-                    if f.get("clause_text"):
-                        output.append(f"\n> {f['clause_text'][:300]}...")
+                    if finding.original_clause_text:
+                        output.append(f"\n> {finding.original_clause_text[:300]}...")
+                    if finding.suggested_change:
+                        output.append(f"\n**Empfehlung:** {finding.suggested_change}")
 
-                    if f.get("recommendation"):
-                        output.append(f"\n**Empfehlung:** {f['recommendation']}")
-
-            if c.get("recommendations"):
+            if analysis and analysis.recommendations:
                 output.append("")
                 output.append("## Empfehlungen")
-                recs = c["recommendations"] if isinstance(c["recommendations"], list) else []
-                for rec in recs:
+                for rec in analysis.recommendations:
                     output.append(f"- {rec}")
+
+            if contract_text:
+                output.append("")
+                output.append("## Vertragstext (Auszug)")
+                excerpt = contract_text[:5000]
+                output.append(excerpt)
+                if len(contract_text) > len(excerpt):
+                    output.append("\n...(gekürzt)...")
 
             return "\n".join(output)
 
@@ -374,7 +414,8 @@ async def get_partners(
                     partner_type,
                     risk_level,
                     risk_score,
-                    registration_number,
+                    handelsregister_id,
+                    vat_id,
                     country,
                     is_watched,
                     created_at
@@ -458,10 +499,10 @@ async def get_deadlines(
                     c.filename as contract_filename,
                     c.id as contract_id,
                     (d.deadline_date - CURRENT_DATE) as days_until
-                FROM deadlines d
+                FROM contract_deadlines d
                 JOIN contracts c ON d.contract_id = c.id
                 WHERE d.organization_id = :org_id
-                  AND d.deleted_at IS NULL
+                  AND d.status IN ('active', 'expired')
                   AND (
                       (d.deadline_date <= :end_date AND d.deadline_date >= :today)
                       OR (:include_overdue AND d.deadline_date < :today)
@@ -485,7 +526,7 @@ async def get_deadlines(
                 # If deadlines table doesn't exist, return message
                 return """# Fristen
 
-Keine Fristen-Tabelle gefunden.
+Keine Fristen-Tabelle gefunden (`contract_deadlines`).
 
 Das Fristen-Feature wurde noch nicht vollständig migriert.
 Bitte prüfen Sie die Verträge einzeln auf Fristen.
@@ -498,7 +539,7 @@ Bitte prüfen Sie die Verträge einzeln auf Fristen.
 ✅ Keine anstehenden Fristen.
 
 Es wurden keine Fristen in den nächsten {days_ahead} Tagen gefunden.
-{'Auch keine überfälligen Fristen vorhanden.' if include_overdue else ''}"""
+{"Auch keine überfälligen Fristen vorhanden." if include_overdue else ""}"""
 
             # Count overdue
             overdue_count = sum(1 for d in deadlines if d.get("days_until", 0) < 0)

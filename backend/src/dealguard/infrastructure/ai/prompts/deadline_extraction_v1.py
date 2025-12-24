@@ -8,8 +8,8 @@ This prompt is designed to:
 """
 
 import json
-from dataclasses import dataclass, field
-from datetime import date, datetime
+from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from dealguard.infrastructure.ai.prompts.contract_analysis_v1 import PromptVersion
@@ -26,7 +26,7 @@ class ExtractedDeadline:
     deadline_date: str  # ISO format YYYY-MM-DD
     description: str  # Human-readable description
     source_clause: str  # Original text from contract
-    clause_location: dict | None  # {page, paragraph}
+    clause_location: dict[str, Any] | None  # {page, paragraph}
     confidence: float  # 0.0 - 1.0
     reminder_days: int  # Suggested reminder days before deadline
     is_recurring: bool  # Whether this repeats

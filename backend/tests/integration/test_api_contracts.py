@@ -1,16 +1,14 @@
 """
 Integration tests for Contract API endpoints (Phase 1).
 """
-import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
+import uuid
+
 from fastapi import status
 from fastapi.testclient import TestClient
 
 from dealguard.infrastructure.database.models.contract import (
     AnalysisStatus,
-    Contract,
 )
 
 
