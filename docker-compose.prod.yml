@@ -321,7 +321,7 @@ services:
         reservations:
           cpus: ${BACKEND_CPU_RESERVE:-0.25}
           memory: ${BACKEND_MEM_RESERVE:-256m}
-    command: ["uvicorn", "dealguard.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    command: ["uvicorn", "dealguard.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "${FORWARDED_ALLOW_IPS:-172.16.0.0/12}"]
     networks:
       - internal
 

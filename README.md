@@ -169,8 +169,8 @@ DealGuard stellt 13 MCP-Tools für LLMs bereit:
 ### Chat (AI Legal Assistant)
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
-| POST | `/api/v1/chat/v2` | Chat mit echten Rechtsdaten |
-| GET | `/api/v1/chat/v2/tools` | Verfügbare Tools |
+| POST | `/api/v2/chat` | Chat mit echten Rechtsdaten |
+| GET | `/api/v2/chat/tools` | Verfügbare Tools |
 
 ### Settings
 | Methode | Pfad | Beschreibung |
