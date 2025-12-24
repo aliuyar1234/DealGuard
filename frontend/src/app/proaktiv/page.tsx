@@ -62,7 +62,7 @@ export default function ProaktivPage() {
 
       try {
         setLoading(true);
-        const [radar, stats, alertList, deadlineList] = await Promise.all([
+        const [radar, stats, alertList, deadlineList] = await Promise.all([     
           getRiskRadar(token),
           getDeadlineStats(token),
           getProactiveAlerts(token, {
@@ -74,7 +74,7 @@ export default function ProaktivPage() {
 
         setRiskRadar(radar);
         setDeadlineStats(stats);
-        setAlerts(alertList);
+        setAlerts(alertList.items);
         setDeadlines(deadlineList);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Fehler beim Laden');
