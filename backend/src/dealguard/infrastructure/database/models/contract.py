@@ -1,14 +1,12 @@
 """Contract and analysis models."""
 
 import logging
-from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, String, Text, Integer, Float
+from sqlalchemy import Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dealguard.infrastructure.database.models.base import (
@@ -22,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from dealguard.infrastructure.database.models.organization import Organization
-    from dealguard.infrastructure.database.models.user import User
     from dealguard.infrastructure.database.models.partner import ContractPartner
+    from dealguard.infrastructure.database.models.user import User
 
 
 class ContractType(str, Enum):
@@ -104,9 +102,7 @@ class Contract(Base, TenantMixin, TimestampMixin, SoftDeleteMixin):
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Contract info
-    contract_type: Mapped[ContractType | None] = mapped_column(
-        String(50), nullable=True
-    )
+    contract_type: Mapped[ContractType | None] = mapped_column(String(50), nullable=True)
     language: Mapped[str] = mapped_column(String(10), default="de", nullable=False)
 
     # Analysis status
@@ -119,11 +115,9 @@ class Contract(Base, TenantMixin, TimestampMixin, SoftDeleteMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Extracted text (stored encrypted, access via contract_text property)
-    _raw_text_encrypted: Mapped[str | None] = mapped_column(
-        "raw_text", Text, nullable=True
-    )
+    _raw_text_encrypted: Mapped[str | None] = mapped_column("raw_text", Text, nullable=True)
 
-    @hybrid_property
+    @property
     def contract_text(self) -> str | None:
         """Get decrypted contract text.
 
@@ -175,7 +169,13 @@ class Contract(Base, TenantMixin, TimestampMixin, SoftDeleteMixin):
         self.contract_text = value
 
     # Contract metadata (additional info)
-    contract_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # Column name is "metadata" (cannot use attribute name "metadata" in SQLAlchemy ORM)
+    contract_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSONB,
+        default=dict,
+        nullable=False,
+    )
 
     # Relationships
     organization: Mapped["Organization"] = relationship(
@@ -221,7 +221,7 @@ class ContractAnalysis(Base, TenantMixin, TimestampMixin):
     risk_score: Mapped[int] = mapped_column(Integer, nullable=False)  # 0-100
     risk_level: Mapped[RiskLevel] = mapped_column(String(50), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
-    recommendations: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    recommendations: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
 
     # Processing metadata
     processing_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -271,8 +271,9 @@ class ContractFinding(Base, TenantMixin, TimestampMixin):
 
     # Original clause
     original_clause_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    clause_location: Mapped[dict | None] = mapped_column(
-        JSONB, nullable=True
+    clause_location: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
     )  # {page, paragraph}
 
     # Recommendations

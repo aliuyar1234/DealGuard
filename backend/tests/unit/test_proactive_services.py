@@ -6,17 +6,18 @@ Tests cover:
 - AlertService: Lifecycle management
 - RiskRadarService: Combined scoring
 """
+
 import uuid
-from datetime import UTC, date, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import date, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from dealguard.infrastructure.database.models.proactive import (
     AlertSeverity,
+    AlertSourceType,
     AlertStatus,
     AlertType,
-    AlertSourceType,
     ContractDeadline,
     DeadlineStatus,
     DeadlineType,
@@ -194,6 +195,7 @@ class TestDeadlineMonitoringService:
         from dealguard.domain.proactive.deadline_service import (
             DeadlineMonitoringService,
         )
+
         return DeadlineMonitoringService(
             mock_db,
             organization_id=tenant_context.organization_id,
@@ -312,6 +314,7 @@ class TestAlertService:
     def alert_service(self, mock_db, tenant_context):
         """Create AlertService instance."""
         from dealguard.domain.proactive.alert_service import AlertService
+
         return AlertService(
             mock_db,
             organization_id=tenant_context.organization_id,
@@ -347,9 +350,7 @@ class TestAlertService:
         """Test marking alert as seen."""
         alert_id = uuid.uuid4()
         alert = MagicMock(id=alert_id, status=AlertStatus.NEW)
-        mock_db.execute.return_value = MagicMock(
-            scalar_one_or_none=MagicMock(return_value=alert)
-        )
+        mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=alert))
 
         result = await alert_service.mark_seen(alert_id)
 
@@ -360,9 +361,7 @@ class TestAlertService:
         """Test resolving alert."""
         alert_id = uuid.uuid4()
         alert = MagicMock(id=alert_id, status=AlertStatus.IN_PROGRESS)
-        mock_db.execute.return_value = MagicMock(
-            scalar_one_or_none=MagicMock(return_value=alert)
-        )
+        mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=alert))
 
         result = await alert_service.resolve(
             alert_id=alert_id,
@@ -381,9 +380,7 @@ class TestAlertService:
             status=AlertStatus.NEW,
             snoozed_until=None,
         )
-        mock_db.execute.return_value = MagicMock(
-            scalar_one_or_none=MagicMock(return_value=alert)
-        )
+        mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=alert))
 
         result = await alert_service.snooze(alert_id=alert_id, days=7)
 
@@ -395,9 +392,7 @@ class TestAlertService:
         """Test dismissing alert."""
         alert_id = uuid.uuid4()
         alert = MagicMock(id=alert_id, status=AlertStatus.NEW)
-        mock_db.execute.return_value = MagicMock(
-            scalar_one_or_none=MagicMock(return_value=alert)
-        )
+        mock_db.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=alert))
 
         result = await alert_service.dismiss(
             alert_id=alert_id,
@@ -409,9 +404,7 @@ class TestAlertService:
     @pytest.mark.asyncio
     async def test_count_new_alerts(self, alert_service, mock_db):
         """Test counting new alerts."""
-        mock_db.execute.return_value = MagicMock(
-            scalar=MagicMock(return_value=5)
-        )
+        mock_db.execute.return_value = MagicMock(scalar=MagicMock(return_value=5))
 
         count = await alert_service.count_new_alerts()
 
@@ -430,6 +423,7 @@ class TestRiskRadarService:
     def risk_radar_service(self, mock_db, tenant_context):
         """Create RiskRadarService instance."""
         from dealguard.domain.proactive.risk_radar_service import RiskRadarService
+
         return RiskRadarService(
             mock_db,
             organization_id=tenant_context.organization_id,
@@ -454,6 +448,7 @@ class TestRiskRadarService:
     @pytest.mark.asyncio
     async def test_risk_score_calculation(self, risk_radar_service):
         """Test risk score calculation with weights."""
+        _ = risk_radar_service
         # Weights: Contract 30%, Partner 25%, Compliance 25%, Deadline 20%
         contract_score = 50
         partner_score = 60
@@ -461,10 +456,10 @@ class TestRiskRadarService:
         deadline_score = 70
 
         expected = int(
-            contract_score * 0.30 +
-            partner_score * 0.25 +
-            compliance_score * 0.25 +
-            deadline_score * 0.20
+            contract_score * 0.30
+            + partner_score * 0.25
+            + compliance_score * 0.25
+            + deadline_score * 0.20
         )
 
         # Calculate: 15 + 15 + 10 + 14 = 54
@@ -485,6 +480,7 @@ class TestDeadlineStats:
         from dealguard.domain.proactive.deadline_service import (
             DeadlineMonitoringService,
         )
+
         return DeadlineMonitoringService(
             mock_db,
             organization_id=tenant_context.organization_id,
@@ -494,23 +490,14 @@ class TestDeadlineStats:
     @pytest.mark.asyncio
     async def test_get_deadline_stats(self, deadline_service, mock_db):
         """Test getting deadline statistics."""
-        today = date.today()
-        deadlines = [
-            MagicMock(deadline_date=today - timedelta(days=1)),
-            MagicMock(deadline_date=today - timedelta(days=3)),
-            MagicMock(deadline_date=today + timedelta(days=1)),
-            MagicMock(deadline_date=today + timedelta(days=3)),
-            MagicMock(deadline_date=today + timedelta(days=7)),
-            MagicMock(deadline_date=today + timedelta(days=10)),
-            MagicMock(deadline_date=today + timedelta(days=25)),
-            MagicMock(deadline_date=today + timedelta(days=40)),
-            MagicMock(deadline_date=today + timedelta(days=60)),
-            MagicMock(deadline_date=today + timedelta(days=90)),
-        ]
         mock_db.execute.return_value = MagicMock(
-            scalars=MagicMock(
+            one=MagicMock(
                 return_value=MagicMock(
-                    all=MagicMock(return_value=deadlines)
+                    total=10,
+                    active=8,
+                    overdue=2,
+                    upcoming_7_days=3,
+                    upcoming_30_days=5,
                 )
             )
         )
@@ -534,6 +521,7 @@ class TestAlertStats:
     def alert_service(self, mock_db, tenant_context):
         """Create AlertService instance."""
         from dealguard.domain.proactive.alert_service import AlertService
+
         return AlertService(
             mock_db,
             organization_id=tenant_context.organization_id,
@@ -543,47 +531,29 @@ class TestAlertStats:
     @pytest.mark.asyncio
     async def test_get_alert_stats(self, alert_service, mock_db):
         """Test getting alert statistics."""
-        alerts = [
-            *[
-                MagicMock(
-                    status=AlertStatus.NEW,
-                    severity=AlertSeverity.INFO,
-                    alert_type=AlertType.DEADLINE_APPROACHING,
-                )
-                for _ in range(5)
-            ],
-            *[
-                MagicMock(
-                    status=AlertStatus.SEEN,
-                    severity=AlertSeverity.LOW,
-                    alert_type=AlertType.DEADLINE_APPROACHING,
-                )
-                for _ in range(8)
-            ],
-            *[
-                MagicMock(
-                    status=AlertStatus.IN_PROGRESS,
-                    severity=AlertSeverity.MEDIUM,
-                    alert_type=AlertType.DEADLINE_APPROACHING,
-                )
-                for _ in range(3)
-            ],
-            *[
-                MagicMock(
-                    status=AlertStatus.RESOLVED,
-                    severity=AlertSeverity.HIGH,
-                    alert_type=AlertType.DEADLINE_APPROACHING,
-                )
-                for _ in range(4)
-            ],
-        ]
-        mock_db.execute.return_value = MagicMock(
-            scalars=MagicMock(
+        status_result = MagicMock(
+            one=MagicMock(
                 return_value=MagicMock(
-                    all=MagicMock(return_value=alerts)
+                    total=20,
+                    new=5,
+                    seen=8,
+                    in_progress=3,
+                    resolved=4,
                 )
             )
         )
+        severity_result = MagicMock(
+            all=MagicMock(
+                return_value=[
+                    (AlertSeverity.INFO, 5),
+                    (AlertSeverity.LOW, 8),
+                    (AlertSeverity.MEDIUM, 3),
+                    (AlertSeverity.HIGH, 4),
+                ]
+            )
+        )
+        type_result = MagicMock(all=MagicMock(return_value=[(AlertType.DEADLINE_APPROACHING, 20)]))
+        mock_db.execute.side_effect = [status_result, severity_result, type_result]
 
         stats = await alert_service.get_stats()
 

@@ -9,10 +9,10 @@ These models enable the proactive monitoring features:
 
 from datetime import date, datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, String, Text, Integer, Float, Date, Boolean
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,7 +23,6 @@ from dealguard.infrastructure.database.models.base import (
 )
 
 if TYPE_CHECKING:
-    from dealguard.infrastructure.database.models.organization import Organization
     from dealguard.infrastructure.database.models.contract import Contract
     from dealguard.infrastructure.database.models.partner import Partner
     from dealguard.infrastructure.database.models.user import User
@@ -162,7 +161,7 @@ class ContractDeadline(Base, TenantMixin, TimestampMixin):
 
     # Source clause (for transparency)
     source_clause: Mapped[str | None] = mapped_column(Text, nullable=True)
-    clause_location: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    clause_location: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # AI extraction metadata
     confidence: Mapped[float] = mapped_column(Float, default=0.8, nullable=False)
@@ -231,7 +230,11 @@ class ProactiveAlert(Base, TenantMixin, TimestampMixin):
 
     # AI recommendation
     ai_recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
-    recommended_actions: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    recommended_actions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        default=list,
+        nullable=False,
+    )
     # Structure: [{"action": "terminate", "label": "Kündigen", "params": {...}}, ...]
 
     # Related entities
@@ -355,7 +358,7 @@ class RiskSnapshot(Base, TenantMixin):
     open_alerts: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # Detailed breakdown
-    details: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Timestamp
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)

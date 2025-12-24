@@ -3,6 +3,7 @@
 import hashlib
 import io
 from dataclasses import dataclass, field
+from typing import cast
 
 import fitz  # PyMuPDF
 from docx import Document
@@ -18,8 +19,11 @@ try:
 
     PDFPLUMBER_AVAILABLE = True
 except ImportError:
+    pdfplumber = None
     PDFPLUMBER_AVAILABLE = False
-    logger.info("pdfplumber_not_available", reason="pdfplumber not installed, table extraction limited")
+    logger.info(
+        "pdfplumber_not_available", reason="pdfplumber not installed, table extraction limited"
+    )
 
 # Supported MIME types
 SUPPORTED_MIME_TYPES = {
@@ -58,7 +62,7 @@ class ExtractedTable:
         for row in data_rows:
             # Pad row if needed
             padded = list(row) + [""] * (len(header) - len(row))
-            lines.append("| " + " | ".join(str(cell) for cell in padded[:len(header)]) + " |")
+            lines.append("| " + " | ".join(str(cell) for cell in padded[: len(header)]) + " |")
 
         return "\n".join(lines)
 
@@ -132,9 +136,7 @@ class DocumentExtractor:
 
         # Validate extraction
         if not text or len(text.strip()) < 50:
-            raise ValidationError(
-                "Dokument konnte nicht gelesen werden oder enthält zu wenig Text"
-            )
+            raise ValidationError("Dokument konnte nicht gelesen werden oder enthält zu wenig Text")
 
         logger.info(
             "document_extracted",
@@ -230,7 +232,7 @@ class DocumentExtractor:
                     text_parts.append(para.text)
 
             # Extract tables with structured data
-            for table_idx, table in enumerate(doc.tables):
+            for table in doc.tables:
                 table_rows: list[list[str]] = []
 
                 for row in table.rows:
@@ -262,14 +264,14 @@ class DocumentExtractor:
             logger.error("docx_extraction_failed", error=str(e))
             raise ValidationError(f"DOCX konnte nicht gelesen werden: {e}")
 
-    def _should_try_ocr(self, page) -> bool:
+    def _should_try_ocr(self, page: fitz.Page) -> bool:
         """Check if page appears to be a scanned image."""
         # Get images on page
         image_list = page.get_images()
         # If page has large images but no text, it's likely scanned
         return len(image_list) > 0
 
-    def _ocr_page(self, page) -> str:
+    def _ocr_page(self, page: fitz.Page) -> str:
         """Perform OCR on a page using Tesseract.
 
         This is optional and only runs if Tesseract is installed.
@@ -280,11 +282,11 @@ class DocumentExtractor:
 
             # Render page to image
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better OCR
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
             # OCR with German language
             text = pytesseract.image_to_string(img, lang="deu")
-            return text
+            return cast(str, text)
 
         except ImportError:
             logger.warning("ocr_not_available", reason="pytesseract not installed")

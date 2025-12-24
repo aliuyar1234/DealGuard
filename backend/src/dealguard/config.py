@@ -3,10 +3,10 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID
 
-from pydantic import Field, PostgresDsn, RedisDsn, field_validator, model_validator
+from pydantic import Field, PostgresDsn, RedisDsn, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default IDs for single-tenant mode (self-hosted)
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     app_debug: bool = False
     app_secret_key: str = Field(
         ...,  # Required - no default for security
-        description="Secret key for encryption. Generate with: python -c \"import secrets; print(secrets.token_urlsafe(32))\"",
+        description='Secret key for encryption. Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"',
     )
 
     # ----- Single-Tenant Mode -----
@@ -77,13 +77,13 @@ class Settings(BaseSettings):
     single_tenant_mode: bool = True
 
     # ----- Database -----
-    database_url: PostgresDsn = Field(default=DEFAULT_DATABASE_URL)
-    database_sync_url: PostgresDsn = Field(default=DEFAULT_DATABASE_SYNC_URL)
+    database_url: PostgresDsn = Field(default=cast(PostgresDsn, DEFAULT_DATABASE_URL))
+    database_sync_url: PostgresDsn = Field(default=cast(PostgresDsn, DEFAULT_DATABASE_SYNC_URL))
     database_pool_size: int = 5
     database_max_overflow: int = 10
 
     # ----- Redis -----
-    redis_url: RedisDsn = Field(default=DEFAULT_REDIS_URL)
+    redis_url: RedisDsn = Field(default=cast(RedisDsn, DEFAULT_REDIS_URL))
 
     # ----- Auth -----
     auth_provider: Literal["supabase", "dev"] = "supabase"  # Use "dev" for local testing
@@ -127,7 +127,11 @@ class Settings(BaseSettings):
         # Try JSON first
         if v.startswith("["):
             import json
-            return json.loads(v)
+
+            raw = json.loads(v)
+            if not isinstance(raw, list) or not all(isinstance(origin, str) for origin in raw):
+                raise ValueError("CORS_ORIGINS must be a JSON list of strings")
+            return raw
         # Fall back to comma-separated
         return [origin.strip() for origin in v.split(",") if origin.strip()]
 
@@ -157,9 +161,7 @@ class Settings(BaseSettings):
                 )
             # Ensure real auth is configured
             if self.auth_provider == "supabase" and not self.supabase_jwt_secret:
-                raise ValueError(
-                    "SUPABASE_JWT_SECRET must be set in production!"
-                )
+                raise ValueError("SUPABASE_JWT_SECRET must be set in production!")
             if str(self.database_url) == DEFAULT_DATABASE_URL:
                 raise ValueError("DATABASE_URL must be set to a production database!")
             if str(self.database_sync_url) == DEFAULT_DATABASE_SYNC_URL:

@@ -4,7 +4,6 @@ Tests rate limit configuration and key generation.
 """
 
 import os
-import pytest
 from unittest.mock import MagicMock, patch
 
 # Set required env vars
@@ -17,12 +16,12 @@ class TestRateLimitConfiguration:
     def test_rate_limit_constants_defined(self):
         """Test that rate limit constants are defined correctly."""
         from dealguard.api.ratelimit import (
-            RATE_LIMIT_DEFAULT,
-            RATE_LIMIT_AUTH,
-            RATE_LIMIT_UPLOAD,
             RATE_LIMIT_AI,
-            RATE_LIMIT_SEARCH,
+            RATE_LIMIT_AUTH,
+            RATE_LIMIT_DEFAULT,
             RATE_LIMIT_HEALTH,
+            RATE_LIMIT_SEARCH,
+            RATE_LIMIT_UPLOAD,
         )
 
         assert RATE_LIMIT_DEFAULT == "100/minute"
@@ -103,6 +102,7 @@ class TestRateLimitExceededHandler:
 
         with patch("dealguard.api.ratelimit.logger"):
             from dealguard.api.ratelimit import rate_limit_exceeded_handler
+
             response = rate_limit_exceeded_handler(mock_request, exc)
 
         assert response.status_code == 429
@@ -110,6 +110,7 @@ class TestRateLimitExceededHandler:
     def test_handler_returns_json_body(self):
         """Test that handler returns proper JSON body."""
         import json
+
         from slowapi.errors import RateLimitExceeded
 
         mock_request = MagicMock()
@@ -122,6 +123,7 @@ class TestRateLimitExceededHandler:
 
         with patch("dealguard.api.ratelimit.logger"):
             from dealguard.api.ratelimit import rate_limit_exceeded_handler
+
             response = rate_limit_exceeded_handler(mock_request, exc)
             body = json.loads(response.body)
 
@@ -144,6 +146,7 @@ class TestRateLimitExceededHandler:
 
         with patch("dealguard.api.ratelimit.logger"):
             from dealguard.api.ratelimit import rate_limit_exceeded_handler
+
             response = rate_limit_exceeded_handler(mock_request, exc)
 
         assert "Retry-After" in response.headers

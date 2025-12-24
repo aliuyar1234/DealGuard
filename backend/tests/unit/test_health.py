@@ -4,8 +4,10 @@ Tests database, Redis, and storage health checks.
 """
 
 import os
-import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Set required env vars
 os.environ["APP_SECRET_KEY"] = "test-secret-key-for-encryption-32chars"
@@ -44,21 +46,28 @@ class TestReadinessEndpoint:
         """Test /ready when all services are available."""
         from dealguard.api.routes.health import readiness_check
 
+        mock_request = MagicMock()
+        mock_request.app.state = SimpleNamespace(
+            s3_storage=MagicMock(client=MagicMock(list_objects_v2=MagicMock()))
+        )
+
         # Mock database session
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock()
 
         # Mock Redis and S3
-        with patch("redis.asyncio.from_url") as mock_redis_from_url, patch(
-            "boto3.client"
-        ) as mock_boto_client:
+        with (
+            patch("redis.asyncio.from_url") as mock_redis_from_url,
+            patch(
+                "dealguard.api.routes.health.to_thread_limited",
+                new_callable=AsyncMock,
+            ),
+        ):
             mock_redis = AsyncMock()
             mock_redis.ping = AsyncMock()
-            mock_redis.close = AsyncMock()
             mock_redis_from_url.return_value = mock_redis
-            mock_boto_client.return_value = MagicMock()
 
-            response = await readiness_check(session=mock_session)
+            response = await readiness_check(request=mock_request, session=mock_session)
 
         assert response.ready is True
         assert response.checks["database"] is True
@@ -70,21 +79,28 @@ class TestReadinessEndpoint:
         """Test /ready when database is unavailable."""
         from dealguard.api.routes.health import readiness_check
 
+        mock_request = MagicMock()
+        mock_request.app.state = SimpleNamespace(
+            s3_storage=MagicMock(client=MagicMock(list_objects_v2=MagicMock()))
+        )
+
         # Mock database session that fails
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(side_effect=Exception("Connection refused"))
 
         # Mock Redis and S3 working
-        with patch("redis.asyncio.from_url") as mock_redis_from_url, patch(
-            "boto3.client"
-        ) as mock_boto_client:
+        with (
+            patch("redis.asyncio.from_url") as mock_redis_from_url,
+            patch(
+                "dealguard.api.routes.health.to_thread_limited",
+                new_callable=AsyncMock,
+            ),
+        ):
             mock_redis = AsyncMock()
             mock_redis.ping = AsyncMock()
-            mock_redis.close = AsyncMock()
             mock_redis_from_url.return_value = mock_redis
-            mock_boto_client.return_value = MagicMock()
 
-            response = await readiness_check(session=mock_session)
+            response = await readiness_check(request=mock_request, session=mock_session)
 
         assert response.ready is False
         assert response.checks["database"] is False
@@ -96,20 +112,28 @@ class TestReadinessEndpoint:
         """Test /ready when Redis is unavailable."""
         from dealguard.api.routes.health import readiness_check
 
+        mock_request = MagicMock()
+        mock_request.app.state = SimpleNamespace(
+            s3_storage=MagicMock(client=MagicMock(list_objects_v2=MagicMock()))
+        )
+
         # Mock database session working
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock()
 
         # Mock Redis failing, S3 working
-        with patch("redis.asyncio.from_url") as mock_redis_from_url, patch(
-            "boto3.client"
-        ) as mock_boto_client:
+        with (
+            patch("redis.asyncio.from_url") as mock_redis_from_url,
+            patch(
+                "dealguard.api.routes.health.to_thread_limited",
+                new_callable=AsyncMock,
+            ),
+        ):
             mock_redis = AsyncMock()
             mock_redis.ping = AsyncMock(side_effect=Exception("Connection refused"))
             mock_redis_from_url.return_value = mock_redis
-            mock_boto_client.return_value = MagicMock()
 
-            response = await readiness_check(session=mock_session)
+            response = await readiness_check(request=mock_request, session=mock_session)
 
         assert response.ready is False
         assert response.checks["database"] is True
@@ -121,22 +145,29 @@ class TestReadinessEndpoint:
         """Test /ready when all services are unavailable."""
         from dealguard.api.routes.health import readiness_check
 
+        mock_request = MagicMock()
+        mock_request.app.state = SimpleNamespace(
+            s3_storage=MagicMock(client=MagicMock(list_objects_v2=MagicMock()))
+        )
+
         # Mock database session that fails
         mock_session = AsyncMock()
         mock_session.execute = AsyncMock(side_effect=Exception("DB down"))
 
         # Mock Redis and S3 failing
-        with patch("redis.asyncio.from_url") as mock_redis_from_url, patch(
-            "boto3.client"
-        ) as mock_boto_client:
+        with (
+            patch("redis.asyncio.from_url") as mock_redis_from_url,
+            patch(
+                "dealguard.api.routes.health.to_thread_limited",
+                new_callable=AsyncMock,
+            ) as mock_to_thread,
+        ):
             mock_redis = AsyncMock()
             mock_redis.ping = AsyncMock(side_effect=Exception("Redis down"))
             mock_redis_from_url.return_value = mock_redis
-            mock_boto_client.return_value = MagicMock(
-                list_objects_v2=MagicMock(side_effect=Exception("S3 down"))
-            )
+            mock_to_thread.side_effect = Exception("S3 down")
 
-            response = await readiness_check(session=mock_session)
+            response = await readiness_check(request=mock_request, session=mock_session)
 
         assert response.ready is False
         assert response.checks["database"] is False

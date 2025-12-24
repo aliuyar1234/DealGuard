@@ -2,10 +2,10 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, String, Text, Integer, Float
+from sqlalchemy import Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -108,7 +108,13 @@ class LegalMessage(Base, TenantMixin):
     #     "search_query": "kündigungsfrist",
     #     "contracts_searched": ["uuid1", "uuid2"]
     # }
-    message_metadata: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # Column name is "metadata" (cannot use attribute name "metadata" in SQLAlchemy ORM)
+    message_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSONB,
+        default=dict,
+        nullable=False,
+    )
 
     # Cost tracking (only for assistant messages)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -132,16 +138,27 @@ class LegalMessage(Base, TenantMixin):
         return f"<LegalMessage {self.role}: {preview}>"
 
     @property
-    def citations(self) -> list[dict]:
+    def citations(self) -> list[dict[str, Any]]:
         """Get citations from message_metadata."""
-        return self.message_metadata.get("citations", [])
+        raw = self.message_metadata.get("citations")
+        if not isinstance(raw, list):
+            return []
+
+        citations: list[dict[str, Any]] = []
+        for item in raw:
+            if isinstance(item, dict):
+                citations.append(cast(dict[str, Any], item))
+        return citations
 
     @property
     def confidence(self) -> float | None:
         """Get confidence score from message_metadata."""
-        return self.message_metadata.get("confidence")
+        raw = self.message_metadata.get("confidence")
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        return None
 
     @property
     def requires_lawyer(self) -> bool:
         """Check if AI recommends consulting a lawyer."""
-        return self.message_metadata.get("requires_lawyer", False)
+        return bool(self.message_metadata.get("requires_lawyer", False))

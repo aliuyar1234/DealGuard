@@ -4,13 +4,14 @@ This module re-exports commonly used dependencies for convenience.
 """
 
 import logging
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.api.middleware.auth import get_current_user
-from dealguard.infrastructure.database.connection import get_session, SessionDep
+from dealguard.infrastructure.database.connection import SessionDep, get_session
 from dealguard.infrastructure.database.models.user import User
 from dealguard.shared.crypto import decrypt_secret, is_encrypted
 
@@ -20,7 +21,11 @@ logger = logging.getLogger(__name__)
 get_db = get_session
 
 
-async def get_user_settings(db: AsyncSession, user_id: str, decrypt_keys: bool = True) -> dict:
+async def get_user_settings(
+    db: AsyncSession,
+    user_id: str,
+    decrypt_keys: bool = True,
+) -> dict[str, Any]:
     """Get user settings from database.
 
     Args:
@@ -31,14 +36,12 @@ async def get_user_settings(db: AsyncSession, user_id: str, decrypt_keys: bool =
     Returns:
         User settings dict with optionally decrypted API keys
     """
-    result = await db.execute(
-        select(User.settings).where(User.id == UUID(user_id))
-    )
+    result = await db.execute(select(User.settings).where(User.id == UUID(user_id)))
     row = result.scalar_one_or_none()
     if not row:
         return {}
 
-    settings = dict(row)
+    settings = cast(dict[str, Any], dict(row))
 
     # Decrypt API keys if requested
     if decrypt_keys:
@@ -46,7 +49,7 @@ async def get_user_settings(db: AsyncSession, user_id: str, decrypt_keys: bool =
             if key_name in settings and settings[key_name]:
                 stored_value = settings[key_name]
                 # Only decrypt if it looks encrypted (backward compatibility)
-                if is_encrypted(stored_value):
+                if isinstance(stored_value, str) and is_encrypted(stored_value):
                     try:
                         settings[key_name] = decrypt_secret(stored_value)
                     except ValueError:

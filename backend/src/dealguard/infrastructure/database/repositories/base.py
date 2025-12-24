@@ -2,18 +2,17 @@
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import Generic, TypeVar
+from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.shared.context import get_tenant_context
 
-T = TypeVar("T")
 
-
-class BaseRepository(Generic[T]):
+class BaseRepository[T]:
     """Base repository with automatic tenant filtering.
 
     IMPORTANT: This base class ensures all queries are filtered by
@@ -31,19 +30,18 @@ class BaseRepository(Generic[T]):
         """Get the current tenant's organization ID."""
         return get_tenant_context().organization_id
 
-    def _base_query(self, include_deleted: bool = False):
-        """Create a base query filtered by tenant and soft-delete status.       
+    def _base_query(self, include_deleted: bool = False) -> Any:
+        """Create a base query filtered by tenant and soft-delete status.
 
         All queries should start from this method to ensure tenant isolation.
 
         Args:
             include_deleted: If True, includes soft-deleted records (default: False)
         """
-        query = select(self.model_class).where(
-            self.model_class.organization_id == self._get_organization_id()
-        )
-        if not include_deleted and hasattr(self.model_class, "deleted_at"):
-            query = query.where(self.model_class.deleted_at.is_(None))
+        model = cast(Any, self.model_class)
+        query = select(model).where(model.organization_id == self._get_organization_id())
+        if not include_deleted and hasattr(model, "deleted_at"):
+            query = query.where(model.deleted_at.is_(None))
         return query
 
     @asynccontextmanager
@@ -54,7 +52,8 @@ class BaseRepository(Generic[T]):
 
     async def get_by_id(self, id: UUID) -> T | None:
         """Get entity by ID, filtered by tenant."""
-        query = self._base_query().where(self.model_class.id == id)
+        model = cast(Any, self.model_class)
+        query = self._base_query().where(model.id == id)
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
@@ -65,9 +64,10 @@ class BaseRepository(Generic[T]):
         offset: int = 0,
     ) -> Sequence[T]:
         """Get all entities for the current tenant."""
+        model = cast(Any, self.model_class)
         query = (
             self._base_query()
-            .order_by(self.model_class.created_at.desc())
+            .order_by(model.created_at.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -76,9 +76,7 @@ class BaseRepository(Generic[T]):
 
     async def count(self) -> int:
         """Count entities for the current tenant."""
-        query = select(func.count()).select_from(
-            self._base_query().subquery()
-        )
+        query = select(func.count()).select_from(self._base_query().subquery())
         result = await self.session.execute(query)
         return result.scalar_one()
 
@@ -88,11 +86,14 @@ class BaseRepository(Generic[T]):
         Automatically sets organization_id from context.
         """
         # Ensure organization_id is set
-        entity.organization_id = self._get_organization_id()
-        self.session.add(entity)
+        entity_any = cast(Any, entity)
+        if not hasattr(entity_any, "organization_id"):
+            raise ValueError(f"{type(entity).__name__} is missing organization_id")
+        entity_any.organization_id = self._get_organization_id()
+        self.session.add(entity_any)
         await self.session.flush()
-        await self.session.refresh(entity)
-        return entity
+        await self.session.refresh(entity_any)
+        return cast(T, entity_any)
 
     async def update(self, entity: T) -> T:
         """Update an existing entity."""
@@ -110,7 +111,8 @@ class BaseRepository(Generic[T]):
 
     async def soft_delete(self, entity: T) -> T:
         """Soft delete an entity by setting deleted_at."""
-        from datetime import datetime, timezone
-
-        entity.deleted_at = datetime.now(timezone.utc)
-        return await self.update(entity)
+        entity_any = cast(Any, entity)
+        if not hasattr(entity_any, "deleted_at"):
+            raise ValueError(f"{type(entity).__name__} does not support soft delete")
+        entity_any.deleted_at = datetime.now(UTC)
+        return await self.update(cast(T, entity_any))

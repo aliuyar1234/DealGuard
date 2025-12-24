@@ -148,8 +148,19 @@ class CompanyDataProvider(ABC):
         # Default implementation: search and match
         results = await self.search_companies(register_id, limit=5)
         for r in results:
-            if r.handelsregister_id == register_id:
-                return await self.get_company_data(r.provider_id)
+            if r.handelsregister_id != register_id:
+                continue
+
+            company = await self.get_company_data(r.provider_id)
+            if (
+                company
+                and court
+                and company.registration_court
+                and company.registration_court != court
+            ):
+                continue
+
+            return company
         return None
 
 

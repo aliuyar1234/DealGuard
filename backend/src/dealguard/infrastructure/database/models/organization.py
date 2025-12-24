@@ -1,8 +1,7 @@
 """Organization model for multi-tenancy."""
 
-from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import String
@@ -16,9 +15,9 @@ from dealguard.infrastructure.database.models.base import (
 )
 
 if TYPE_CHECKING:
-    from dealguard.infrastructure.database.models.user import User
     from dealguard.infrastructure.database.models.contract import Contract
     from dealguard.infrastructure.database.models.partner import Partner
+    from dealguard.infrastructure.database.models.user import User
 
 
 class PlanTier(str, Enum):
@@ -51,7 +50,7 @@ class Organization(Base, TimestampMixin, SoftDeleteMixin):
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Settings (flexible JSON for org-specific config)
-    settings: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Relationships
     users: Mapped[list["User"]] = relationship(

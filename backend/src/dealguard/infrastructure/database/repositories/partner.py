@@ -1,19 +1,19 @@
 """Partner repositories."""
 
-from datetime import datetime, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select, func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from dealguard.infrastructure.database.models.partner import (
-    Partner,
-    PartnerCheck,
-    PartnerAlert,
-    ContractPartner,
-    PartnerRiskLevel,
     CheckStatus,
+    ContractPartner,
+    Partner,
+    PartnerAlert,
+    PartnerCheck,
+    PartnerRiskLevel,
 )
 from dealguard.infrastructure.database.repositories.base import BaseRepository
 
@@ -32,7 +32,7 @@ class PartnerRepository(BaseRepository[Partner]):
             .options(
                 selectinload(Partner.checks),
                 selectinload(Partner.alerts),
-                selectinload(Partner.contract_links),
+                selectinload(Partner.contract_links).selectinload(ContractPartner.contract),
             )
         )
         result = await self.session.execute(query)
@@ -99,24 +99,38 @@ class PartnerRepository(BaseRepository[Partner]):
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
-    async def get_watched_partners(self) -> Sequence[Partner]:
-        """Get all partners on the watchlist."""
+    async def get_watched_partners(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Sequence[Partner]:
+        """Get partners on the watchlist."""
         query = (
             self._base_query()
             .where(Partner.deleted_at.is_(None))
             .where(Partner.is_watched.is_(True))
             .order_by(Partner.name.asc())
+            .limit(limit)
+            .offset(offset)
         )
         result = await self.session.execute(query)
         return result.scalars().all()
 
-    async def get_high_risk_partners(self) -> Sequence[Partner]:
+    async def get_high_risk_partners(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Sequence[Partner]:
         """Get partners with high or critical risk level."""
         query = (
             self._base_query()
             .where(Partner.deleted_at.is_(None))
             .where(Partner.risk_level.in_([PartnerRiskLevel.HIGH, PartnerRiskLevel.CRITICAL]))
             .order_by(Partner.risk_score.desc())
+            .limit(limit)
+            .offset(offset)
         )
         result = await self.session.execute(query)
         return result.scalars().all()
@@ -130,7 +144,7 @@ class PartnerRepository(BaseRepository[Partner]):
         """Update partner's risk assessment."""
         partner.risk_score = risk_score
         partner.risk_level = risk_level
-        partner.last_check_at = datetime.now(timezone.utc)
+        partner.last_check_at = datetime.now(UTC)
         return await self.update(partner)
 
 
@@ -240,7 +254,7 @@ class PartnerAlertRepository(BaseRepository[PartnerAlert]):
     async def dismiss(self, alert: PartnerAlert, user_id: UUID) -> PartnerAlert:
         """Dismiss an alert."""
         alert.is_dismissed = True
-        alert.dismissed_at = datetime.now(timezone.utc)
+        alert.dismissed_at = datetime.now(UTC)
         alert.dismissed_by = user_id
         return await self.update(alert)
 

@@ -7,12 +7,12 @@ These services:
 4. Generate alerts for approaching deadlines
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, timedelta
-from typing import Sequence
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,14 +23,14 @@ from dealguard.infrastructure.ai.prompts.deadline_extraction_v1 import (
 )
 from dealguard.infrastructure.database.models.contract import Contract
 from dealguard.infrastructure.database.models.proactive import (
-    ContractDeadline,
-    DeadlineType,
-    DeadlineStatus,
-    ProactiveAlert,
-    AlertSourceType,
-    AlertType,
     AlertSeverity,
+    AlertSourceType,
     AlertStatus,
+    AlertType,
+    ContractDeadline,
+    DeadlineStatus,
+    DeadlineType,
+    ProactiveAlert,
 )
 from dealguard.shared.logging import get_logger
 
@@ -46,7 +46,6 @@ class DeadlineStats:
     overdue: int
     upcoming_7_days: int
     upcoming_30_days: int
-
 
 
 class _DeadlineBaseService:
@@ -128,6 +127,9 @@ class DeadlineExtractionService(_DeadlineBaseService):
             filename=contract.filename,
         )
 
+        # Release the DB connection before long-running network I/O (AI call).
+        await self.session.commit()
+
         ai_response = await self.ai_client.complete(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -150,7 +152,7 @@ class DeadlineExtractionService(_DeadlineBaseService):
         contract.contract_metadata = {
             **contract.contract_metadata,
             "deadline_extraction": {
-                "extracted_at": datetime.now(timezone.utc).isoformat(),
+                "extracted_at": datetime.now(UTC).isoformat(),
                 "deadline_count": len(deadlines),
                 "has_auto_renewal": extraction_result.has_auto_renewal,
                 "auto_renewal_period": extraction_result.auto_renewal_period,
@@ -231,6 +233,7 @@ class DeadlineExtractionService(_DeadlineBaseService):
 
 class DeadlineMonitoringService(_DeadlineBaseService):
     """Service for querying deadlines and generating alerts."""
+
     #                  DEADLINE MONITORING
     # ─────────────────────────────────────────────────────────────
 
@@ -284,29 +287,49 @@ class DeadlineMonitoringService(_DeadlineBaseService):
         org_id = self._get_organization_id()
         today = date.today()
 
-        # Get all active deadlines
+        upcoming_7_date = today + timedelta(days=7)
+        upcoming_30_date = today + timedelta(days=30)
+
         query = (
-            select(ContractDeadline)
+            select(
+                func.count().label("total"),
+                func.count().filter(ContractDeadline.deadline_date >= today).label("active"),
+                func.count().filter(ContractDeadline.deadline_date < today).label("overdue"),
+                func.count()
+                .filter(
+                    and_(
+                        ContractDeadline.deadline_date >= today,
+                        ContractDeadline.deadline_date <= upcoming_7_date,
+                    )
+                )
+                .label("upcoming_7_days"),
+                func.count()
+                .filter(
+                    and_(
+                        ContractDeadline.deadline_date >= today,
+                        ContractDeadline.deadline_date <= upcoming_30_date,
+                    )
+                )
+                .label("upcoming_30_days"),
+            )
+            .select_from(ContractDeadline)
+            .join(Contract, Contract.id == ContractDeadline.contract_id)
             .where(ContractDeadline.organization_id == org_id)
             .where(ContractDeadline.status == DeadlineStatus.ACTIVE)
+            .where(Contract.deleted_at.is_(None))
         )
         result = await self.session.execute(query)
-        deadlines = result.scalars().all()
+        row = result.one()
 
-        total = len(deadlines)
-        overdue = sum(1 for d in deadlines if d.deadline_date < today)
-        upcoming_7 = sum(
-            1 for d in deadlines
-            if today <= d.deadline_date <= today + timedelta(days=7)
-        )
-        upcoming_30 = sum(
-            1 for d in deadlines
-            if today <= d.deadline_date <= today + timedelta(days=30)
-        )
+        total = int(row.total or 0)
+        active = int(row.active or 0)
+        overdue = int(row.overdue or 0)
+        upcoming_7 = int(row.upcoming_7_days or 0)
+        upcoming_30 = int(row.upcoming_30_days or 0)
 
         return DeadlineStats(
             total=total,
-            active=total - overdue,
+            active=active,
             overdue=overdue,
             upcoming_7_days=upcoming_7,
             upcoming_30_days=upcoming_30,
@@ -355,7 +378,7 @@ class DeadlineMonitoringService(_DeadlineBaseService):
             return None
 
         deadline.status = DeadlineStatus.HANDLED
-        deadline.handled_at = datetime.now(timezone.utc)
+        deadline.handled_at = datetime.now(UTC)
         deadline.handled_by = user_id
         deadline.handled_action = action
         deadline.notes = notes
@@ -391,7 +414,7 @@ class DeadlineMonitoringService(_DeadlineBaseService):
             return None
 
         deadline.status = DeadlineStatus.DISMISSED
-        deadline.handled_at = datetime.now(timezone.utc)
+        deadline.handled_at = datetime.now(UTC)
         deadline.handled_by = user_id
         deadline.handled_action = "dismissed"
         deadline.notes = notes
@@ -451,15 +474,51 @@ class DeadlineMonitoringService(_DeadlineBaseService):
         today = date.today()
         alerts_generated = []
 
-        # Get all active deadlines
-        query = (
-            select(ContractDeadline)
+        max_reminder_query = (
+            select(func.coalesce(func.max(ContractDeadline.reminder_days_before), 0))
+            .select_from(ContractDeadline)
+            .join(Contract, Contract.id == ContractDeadline.contract_id)
             .where(ContractDeadline.organization_id == org_id)
             .where(ContractDeadline.status == DeadlineStatus.ACTIVE)
+            .where(Contract.deleted_at.is_(None))
+        )
+        max_reminder_result = await self.session.execute(max_reminder_query)
+        max_reminder_days = int(max_reminder_result.scalar() or 0)
+
+        attention_end_date = today + timedelta(days=max_reminder_days)
+
+        # Only consider deadlines that can possibly require attention today:
+        # - overdue (deadline_date < today) OR
+        # - upcoming within the max reminder horizon for this org.
+        query = (
+            select(ContractDeadline)
+            .join(Contract, Contract.id == ContractDeadline.contract_id)
+            .where(ContractDeadline.organization_id == org_id)
+            .where(ContractDeadline.status == DeadlineStatus.ACTIVE)
+            .where(ContractDeadline.deadline_date <= attention_end_date)
+            .where(Contract.deleted_at.is_(None))
             .options(selectinload(ContractDeadline.contract))
         )
         result = await self.session.execute(query)
         deadlines = result.scalars().all()
+
+        if not deadlines:
+            return []
+
+        deadline_ids = [d.id for d in deadlines]
+        existing_alerts_query = (
+            select(ProactiveAlert.source_id)
+            .where(ProactiveAlert.organization_id == org_id)
+            .where(ProactiveAlert.source_type == AlertSourceType.DEADLINE)
+            .where(ProactiveAlert.source_id.in_(deadline_ids))
+            .where(
+                ProactiveAlert.status.in_(
+                    [AlertStatus.NEW, AlertStatus.SEEN, AlertStatus.IN_PROGRESS]
+                )
+            )
+        )
+        existing_result = await self.session.execute(existing_alerts_query)
+        existing_deadline_alerts = {row[0] for row in existing_result.all()}
 
         for deadline in deadlines:
             days_until = (deadline.deadline_date - today).days
@@ -467,8 +526,7 @@ class DeadlineMonitoringService(_DeadlineBaseService):
             # Check if within reminder period
             if days_until <= deadline.reminder_days_before and days_until >= 0:
                 # Check if we already have an alert for this deadline
-                existing_alert = await self._get_existing_alert(deadline.id)
-                if existing_alert:
+                if deadline.id in existing_deadline_alerts:
                     continue
 
                 # Generate alert
@@ -481,8 +539,7 @@ class DeadlineMonitoringService(_DeadlineBaseService):
                 deadline.status = DeadlineStatus.EXPIRED
 
                 # Generate critical alert
-                existing_alert = await self._get_existing_alert(deadline.id)
-                if not existing_alert:
+                if deadline.id not in existing_deadline_alerts:
                     alert = await self._create_overdue_alert(deadline, abs(days_until))
                     alerts_generated.append(alert)
 
@@ -506,9 +563,11 @@ class DeadlineMonitoringService(_DeadlineBaseService):
             .where(ProactiveAlert.organization_id == org_id)
             .where(ProactiveAlert.source_type == AlertSourceType.DEADLINE)
             .where(ProactiveAlert.source_id == deadline_id)
-            .where(ProactiveAlert.status.in_([
-                AlertStatus.NEW, AlertStatus.SEEN, AlertStatus.IN_PROGRESS
-            ]))
+            .where(
+                ProactiveAlert.status.in_(
+                    [AlertStatus.NEW, AlertStatus.SEEN, AlertStatus.IN_PROGRESS]
+                )
+            )
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
@@ -572,8 +631,8 @@ class DeadlineMonitoringService(_DeadlineBaseService):
             severity=severity,
             title=title,
             description=f"Vertrag: {deadline.contract.filename}\n\n"
-                       f"Frist: {deadline.deadline_date.strftime('%d.%m.%Y')}\n"
-                       f"Klausel: {deadline.source_clause or 'Nicht verfügbar'}",
+            f"Frist: {deadline.deadline_date.strftime('%d.%m.%Y')}\n"
+            f"Klausel: {deadline.source_clause or 'Nicht verfügbar'}",
             ai_recommendation=recommendation,
             recommended_actions=actions,
             related_contract_id=deadline.contract_id,
@@ -601,8 +660,8 @@ class DeadlineMonitoringService(_DeadlineBaseService):
             severity=AlertSeverity.CRITICAL,
             title=f"ÜBERFÄLLIG: Frist seit {days_overdue} Tagen abgelaufen",
             description=f"Vertrag: {deadline.contract.filename}\n\n"
-                       f"Frist war: {deadline.deadline_date.strftime('%d.%m.%Y')}\n"
-                       f"Typ: {deadline.deadline_type.value}",
+            f"Frist war: {deadline.deadline_date.strftime('%d.%m.%Y')}\n"
+            f"Typ: {deadline.deadline_type.value}",
             ai_recommendation="Diese Frist ist bereits abgelaufen. Prüfen Sie die Konsequenzen.",
             recommended_actions=[
                 {"action": "view_contract", "label": "Vertrag ansehen"},

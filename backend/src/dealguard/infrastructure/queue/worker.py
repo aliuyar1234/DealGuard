@@ -8,15 +8,26 @@ Jobs:
 - wake_snoozed_alerts_job: Wake up snoozed alerts (cron)
 """
 
+import asyncio
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 from uuid import UUID
 
 from arq import cron
 from arq.connections import RedisSettings
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.config import get_settings
-from dealguard.infrastructure.ai.cost_tracker import CostTracker
+from dealguard.domain.contracts.services import ContractAnalysisService
+from dealguard.domain.proactive.alert_service import AlertService
+from dealguard.domain.proactive.deadline_service import (
+    DeadlineExtractionService,
+    DeadlineMonitoringService,
+)
+from dealguard.domain.proactive.risk_radar_service import RiskRadarService
 from dealguard.infrastructure.ai.factory import AIClient, get_ai_client
 from dealguard.infrastructure.ai.prompts.deadline_extraction_v1 import (
     DeadlineExtractionPromptV1,
@@ -29,17 +40,8 @@ from dealguard.infrastructure.database.repositories.contract import (
 )
 from dealguard.infrastructure.document.extractor import DocumentExtractor
 from dealguard.infrastructure.storage.s3 import S3Storage
-from dealguard.domain.contracts.services import ContractAnalysisService
-from dealguard.domain.proactive.deadline_service import (
-    DeadlineExtractionService,
-    DeadlineMonitoringService,
-)
-from dealguard.domain.proactive.alert_service import AlertService
-from dealguard.domain.proactive.risk_radar_service import RiskRadarService
-from dealguard.shared.context import TenantContext, set_tenant_context
+from dealguard.shared.context import TenantContext, clear_tenant_context, set_tenant_context
 from dealguard.shared.logging import get_logger, setup_logging
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -62,11 +64,11 @@ class JobState:
 
 
 async def analyze_contract_job(
-    ctx: dict,
+    ctx: dict[str, object],
     contract_id: str,
     organization_id: str,
     user_id: str,
-) -> dict:
+) -> dict[str, object]:
     """Background job to analyze a contract.
 
     Args:
@@ -95,7 +97,7 @@ async def analyze_contract_job(
             )
         )
 
-        job_state: JobState = ctx["job_state"]
+        job_state = cast(JobState, ctx["job_state"])
         service = job_state.contract_service
 
         # Perform analysis
@@ -129,11 +131,11 @@ async def analyze_contract_job(
 
 
 async def extract_deadlines_job(
-    ctx: dict,
+    ctx: dict[str, object],
     contract_id: str,
     organization_id: str,
     user_id: str,
-) -> dict:
+) -> dict[str, object]:
     """Background job to extract deadlines from a contract.
 
     This should be called after contract analysis completes.
@@ -155,8 +157,8 @@ async def extract_deadlines_job(
             )
         )
 
-        job_state: JobState = ctx["job_state"]
-        job_ctx: JobContext = ctx["job_context"]
+        job_state = cast(JobState, ctx["job_state"])
+        job_ctx = cast(JobContext, ctx["job_context"])
         deadline_service = DeadlineExtractionService(
             session=job_state.session,
             ai_client=job_ctx.ai_client,
@@ -164,9 +166,7 @@ async def extract_deadlines_job(
             organization_id=UUID(organization_id),
         )
 
-        deadlines = await deadline_service.extract_deadlines_from_contract(
-            UUID(contract_id)
-        )
+        deadlines = await deadline_service.extract_deadlines_from_contract(UUID(contract_id))
 
         logger.info(
             "job_completed",
@@ -195,7 +195,7 @@ async def extract_deadlines_job(
         }
 
 
-async def check_deadlines_job(ctx: dict) -> dict:
+async def check_deadlines_job(ctx: dict[str, object]) -> dict[str, object]:
     """Daily cron job to check all organizations for approaching deadlines.
 
     Generates alerts for deadlines that need attention.
@@ -203,26 +203,26 @@ async def check_deadlines_job(ctx: dict) -> dict:
     logger.info("job_started", job="check_deadlines")
 
     try:
-        job_ctx: JobContext = ctx["job_context"]
+        job_ctx = cast(JobContext, ctx["job_context"])
         session_factory = job_ctx.session_factory
         total_alerts = 0
         orgs_processed = 0
 
-        # Get all organizations
-        async with session_factory() as session:
-            query = select(Organization)
-            result = await session.execute(query)
-            organizations = result.scalars().all()
+        max_org_concurrency = int(os.getenv("DEALGUARD_ORG_JOB_CONCURRENCY", "5"))
+        max_org_concurrency = max(1, min(32, max_org_concurrency))
+        batch_size = int(os.getenv("DEALGUARD_ORG_JOB_BATCH_SIZE", "200"))
+        batch_size = max(1, min(2000, batch_size))
 
-        # Process each organization
-        for org in organizations:
+        semaphore = asyncio.Semaphore(max_org_concurrency)
+
+        async def _process_org(org_id: UUID) -> tuple[bool, int]:
+            await semaphore.acquire()
             try:
                 async with session_factory() as session:
-                    # Set tenant context
                     set_tenant_context(
                         TenantContext(
-                            organization_id=org.id,
-                            user_id=org.id,  # Use org ID as system user
+                            organization_id=org_id,
+                            user_id=org_id,  # System user
                             user_email="system@dealguard.io",
                             user_role="system",
                         )
@@ -230,21 +230,43 @@ async def check_deadlines_job(ctx: dict) -> dict:
 
                     deadline_service = DeadlineMonitoringService(
                         session,
-                        organization_id=org.id,
-                        user_id=org.id,
+                        organization_id=org_id,
+                        user_id=org_id,
                     )
                     alerts = await deadline_service.check_and_generate_alerts()
                     await session.commit()
 
-                    total_alerts += len(alerts)
-                    orgs_processed += 1
-
+                    return True, len(alerts)
             except Exception as e:
                 logger.error(
                     "org_deadline_check_failed",
-                    organization_id=str(org.id),
+                    organization_id=str(org_id),
                     error=str(e),
                 )
+                return False, 0
+            finally:
+                clear_tenant_context()
+                semaphore.release()
+
+        last_org_id: UUID | None = None
+        while True:
+            async with session_factory() as session:
+                query = select(Organization.id).order_by(Organization.id).limit(batch_size)
+                if last_org_id is not None:
+                    query = query.where(Organization.id > last_org_id)
+                result = await session.execute(query)
+                org_ids = list(result.scalars().all())
+
+            if not org_ids:
+                break
+
+            last_org_id = org_ids[-1]
+
+            results = await asyncio.gather(*(_process_org(org_id) for org_id in org_ids))
+            for ok, alerts_count in results:
+                if ok:
+                    orgs_processed += 1
+                total_alerts += alerts_count
 
         logger.info(
             "job_completed",
@@ -268,29 +290,30 @@ async def check_deadlines_job(ctx: dict) -> dict:
         return {"status": "failed", "error": str(e)}
 
 
-async def create_risk_snapshot_job(ctx: dict) -> dict:
+async def create_risk_snapshot_job(ctx: dict[str, object]) -> dict[str, object]:
     """Daily cron job to create risk snapshots for all organizations."""
     logger.info("job_started", job="create_risk_snapshot")
 
     try:
-        job_ctx: JobContext = ctx["job_context"]
+        job_ctx = cast(JobContext, ctx["job_context"])
         session_factory = job_ctx.session_factory
         orgs_processed = 0
 
-        # Get all organizations
-        async with session_factory() as session:
-            query = select(Organization)
-            result = await session.execute(query)
-            organizations = result.scalars().all()
+        max_org_concurrency = int(os.getenv("DEALGUARD_ORG_JOB_CONCURRENCY", "5"))
+        max_org_concurrency = max(1, min(32, max_org_concurrency))
+        batch_size = int(os.getenv("DEALGUARD_ORG_JOB_BATCH_SIZE", "200"))
+        batch_size = max(1, min(2000, batch_size))
 
-        # Process each organization
-        for org in organizations:
+        semaphore = asyncio.Semaphore(max_org_concurrency)
+
+        async def _process_org(org_id: UUID) -> bool:
+            await semaphore.acquire()
             try:
                 async with session_factory() as session:
                     set_tenant_context(
                         TenantContext(
-                            organization_id=org.id,
-                            user_id=org.id,
+                            organization_id=org_id,
+                            user_id=org_id,
                             user_email="system@dealguard.io",
                             user_role="system",
                         )
@@ -298,19 +321,38 @@ async def create_risk_snapshot_job(ctx: dict) -> dict:
 
                     risk_radar_service = RiskRadarService(
                         session,
-                        organization_id=org.id,
+                        organization_id=org_id,
                     )
                     await risk_radar_service.create_daily_snapshot()
                     await session.commit()
-
-                    orgs_processed += 1
-
+                    return True
             except Exception as e:
                 logger.error(
                     "org_snapshot_failed",
-                    organization_id=str(org.id),
+                    organization_id=str(org_id),
                     error=str(e),
                 )
+                return False
+            finally:
+                clear_tenant_context()
+                semaphore.release()
+
+        last_org_id: UUID | None = None
+        while True:
+            async with session_factory() as session:
+                query = select(Organization.id).order_by(Organization.id).limit(batch_size)
+                if last_org_id is not None:
+                    query = query.where(Organization.id > last_org_id)
+                result = await session.execute(query)
+                org_ids = list(result.scalars().all())
+
+            if not org_ids:
+                break
+
+            last_org_id = org_ids[-1]
+
+            results = await asyncio.gather(*(_process_org(org_id) for org_id in org_ids))
+            orgs_processed += sum(1 for ok in results if ok)
 
         logger.info(
             "job_completed",
@@ -332,29 +374,30 @@ async def create_risk_snapshot_job(ctx: dict) -> dict:
         return {"status": "failed", "error": str(e)}
 
 
-async def wake_snoozed_alerts_job(ctx: dict) -> dict:
+async def wake_snoozed_alerts_job(ctx: dict[str, object]) -> dict[str, object]:
     """Hourly cron job to wake up snoozed alerts."""
     logger.info("job_started", job="wake_snoozed_alerts")
 
     try:
-        job_ctx: JobContext = ctx["job_context"]
+        job_ctx = cast(JobContext, ctx["job_context"])
         session_factory = job_ctx.session_factory
         total_awakened = 0
 
-        # Get all organizations
-        async with session_factory() as session:
-            query = select(Organization)
-            result = await session.execute(query)
-            organizations = result.scalars().all()
+        max_org_concurrency = int(os.getenv("DEALGUARD_ORG_JOB_CONCURRENCY", "5"))
+        max_org_concurrency = max(1, min(32, max_org_concurrency))
+        batch_size = int(os.getenv("DEALGUARD_ORG_JOB_BATCH_SIZE", "200"))
+        batch_size = max(1, min(2000, batch_size))
 
-        # Process each organization
-        for org in organizations:
+        semaphore = asyncio.Semaphore(max_org_concurrency)
+
+        async def _process_org(org_id: UUID) -> tuple[bool, int]:
+            await semaphore.acquire()
             try:
                 async with session_factory() as session:
                     set_tenant_context(
                         TenantContext(
-                            organization_id=org.id,
-                            user_id=org.id,
+                            organization_id=org_id,
+                            user_id=org_id,
                             user_email="system@dealguard.io",
                             user_role="system",
                         )
@@ -362,20 +405,40 @@ async def wake_snoozed_alerts_job(ctx: dict) -> dict:
 
                     alert_service = AlertService(
                         session,
-                        organization_id=org.id,
-                        user_id=org.id,
+                        organization_id=org_id,
+                        user_id=org_id,
                     )
                     count = await alert_service.wake_snoozed_alerts()
                     await session.commit()
-
-                    total_awakened += count
-
+                    return True, count
             except Exception as e:
                 logger.error(
                     "org_wake_alerts_failed",
-                    organization_id=str(org.id),
+                    organization_id=str(org_id),
                     error=str(e),
                 )
+                return False, 0
+            finally:
+                clear_tenant_context()
+                semaphore.release()
+
+        last_org_id: UUID | None = None
+        while True:
+            async with session_factory() as session:
+                query = select(Organization.id).order_by(Organization.id).limit(batch_size)
+                if last_org_id is not None:
+                    query = query.where(Organization.id > last_org_id)
+                result = await session.execute(query)
+                org_ids = list(result.scalars().all())
+
+            if not org_ids:
+                break
+
+            last_org_id = org_ids[-1]
+
+            results = await asyncio.gather(*(_process_org(org_id) for org_id in org_ids))
+            for _ok, awakened in results:
+                total_awakened += awakened
 
         logger.info(
             "job_completed",
@@ -400,7 +463,7 @@ async def wake_snoozed_alerts_job(ctx: dict) -> dict:
 # ----- Worker Settings -----
 
 
-async def startup(ctx: dict) -> None:
+async def startup(ctx: dict[str, object]) -> None:
     """Initialize worker resources on startup."""
     setup_logging()
     logger.info("worker_starting")
@@ -414,22 +477,25 @@ async def startup(ctx: dict) -> None:
         session_factory=session_factory,
         storage=S3Storage(),
         extractor=DocumentExtractor(),
-        ai_client=get_ai_client(CostTracker()),
+        ai_client=get_ai_client(),
     )
 
     logger.info("worker_started")
 
 
-async def shutdown(ctx: dict) -> None:
+async def shutdown(ctx: dict[str, object]) -> None:
     """Clean up worker resources on shutdown."""
+    _ = ctx
     logger.info("worker_stopping")
-    # Add cleanup if needed
+    from dealguard.infrastructure.ai.factory import close_ai_client
+
+    await close_ai_client()
     logger.info("worker_stopped")
 
 
-async def on_job_start(ctx: dict) -> None:
+async def on_job_start(ctx: dict[str, object]) -> None:
     """Called before each job starts."""
-    job_ctx: JobContext = ctx["job_context"]
+    job_ctx = cast(JobContext, ctx["job_context"])
     session = job_ctx.session_factory()
     ctx["job_state"] = JobState(
         session=session,
@@ -439,15 +505,17 @@ async def on_job_start(ctx: dict) -> None:
             ai_client=job_ctx.ai_client,
             storage=job_ctx.storage,
             extractor=job_ctx.extractor,
+            transaction=session,
         ),
     )
 
 
-async def on_job_end(ctx: dict) -> None:
+async def on_job_end(ctx: dict[str, object]) -> None:
     """Called after each job completes."""
     # Commit and close session
-    job_state: JobState | None = ctx.get("job_state")
-    if job_state:
+    job_state_value = ctx.get("job_state")
+    job_state = job_state_value if isinstance(job_state_value, JobState) else None
+    if job_state is not None:
         try:
             await job_state.session.commit()
         except Exception:

@@ -9,10 +9,12 @@ Endpoint: http://data.bka.gv.at/ris/OGDService.asmx
 
 import logging
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
 from xml.etree import ElementTree
+from xml.sax.saxutils import escape as _xml_escape
 
 import httpx
+from defusedxml import ElementTree as DefusedElementTree
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,10 @@ RISApplikation = Literal[
 # SOAP namespaces
 SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 RIS_NS = "http://ris.bka.gv.at/"
+
+
+def _escape_xml_text(value: str) -> str:
+    return _xml_escape(value, {'"': "&quot;", "'": "&apos;"})
 
 
 @dataclass
@@ -119,15 +125,18 @@ class RISClient:
         The RIS API uses a specific XML format for search requests.
         See: https://data.bka.gv.at/ris/OGDService.asmx?op=request
         """
+        application_xml = _escape_xml_text(application)
+        query_xml = _escape_xml_text(query)
+
         # RIS expects specific XML structure
         soap_request = f"""<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:ris="http://ris.bka.gv.at/">
   <soap:Body>
     <ris:request>
-      <ris:application>{application}</ris:application>
+      <ris:application>{application_xml}</ris:application>
       <ris:query>
-        <ris:searchTerms>{query}</ris:searchTerms>
+        <ris:searchTerms>{query_xml}</ris:searchTerms>
         <ris:pageNumber>{page}</ris:pageNumber>
         <ris:pageSize>{limit}</ris:pageSize>
       </ris:query>
@@ -142,13 +151,16 @@ class RISClient:
         application: RISApplikation = "Bundesrecht",
     ) -> str:
         """Build SOAP request for fetching a specific document."""
+        application_xml = _escape_xml_text(application)
+        document_number_xml = _escape_xml_text(document_number)
+
         soap_request = f"""<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                xmlns:ris="http://ris.bka.gv.at/">
   <soap:Body>
     <ris:getDocument>
-      <ris:application>{application}</ris:application>
-      <ris:documentNumber>{document_number}</ris:documentNumber>
+      <ris:application>{application_xml}</ris:application>
+      <ris:documentNumber>{document_number_xml}</ris:documentNumber>
     </ris:getDocument>
   </soap:Body>
 </soap:Envelope>"""
@@ -163,7 +175,7 @@ class RISClient:
         results: list[RISSearchResult] = []
 
         try:
-            root = ElementTree.fromstring(xml_response)
+            root = cast(ElementTree.Element, DefusedElementTree.fromstring(xml_response))
 
             # Find all document elements in the response
             # The exact structure depends on the RIS response format
@@ -173,7 +185,7 @@ class RISClient:
                     if result:
                         results.append(result)
 
-        except ElementTree.ParseError as e:
+        except Exception as e:
             logger.error(f"Failed to parse RIS search response: {e}")
 
         return results
@@ -214,10 +226,10 @@ class RISClient:
         self,
         xml_response: str,
         application: str,
-    ) -> RISDocument | None:
+        ) -> RISDocument | None:
         """Parse the XML response from a document request."""
         try:
-            root = ElementTree.fromstring(xml_response)
+            root = cast(ElementTree.Element, DefusedElementTree.fromstring(xml_response))
 
             # Helper to get text from element
             def get_text(tag_suffix: str) -> str | None:
@@ -241,10 +253,9 @@ class RISClient:
             # Try to get the full text content
             full_text = ""
             for elem in root.iter():
-                if elem.tag.endswith("Inhalt") or elem.tag.endswith("Content"):
-                    if elem.text:
-                        full_text = elem.text.strip()
-                        break
+                if (elem.tag.endswith("Inhalt") or elem.tag.endswith("Content")) and elem.text:
+                    full_text = elem.text.strip()
+                    break
 
             return RISDocument(
                 document_number=document_number,
@@ -258,7 +269,7 @@ class RISClient:
                 application=application,
             )
 
-        except ElementTree.ParseError as e:
+        except Exception as e:
             logger.error(f"Failed to parse RIS document response: {e}")
             return None
 
@@ -401,7 +412,7 @@ class RISRestClient:
         self,
         search_text: str,
         limit: int = 10,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Search Austrian federal laws using REST API.
 
         Args:
@@ -428,7 +439,11 @@ class RISRestClient:
             response.raise_for_status()
 
             data = response.json()
-            results = data.get("OgdSearchResult", {}).get("OgdDocumentResults", {}).get("OgdDocumentReference", [])
+            results = (
+                data.get("OgdSearchResult", {})
+                .get("OgdDocumentResults", {})
+                .get("OgdDocumentReference", [])
+            )
 
             # Handle single result (API returns dict instead of list)
             if isinstance(results, dict):
@@ -441,12 +456,14 @@ class RISRestClient:
                 bundesrecht = data_section.get("Bundesrecht", {})
                 technisch = data_section.get("Technisch", {})
 
-                flat_results.append({
-                    "Dokumentnummer": technisch.get("ID", ""),
-                    "Kurztitel": bundesrecht.get("Kurztitel", ""),
-                    "Titel": bundesrecht.get("Titel", ""),
-                    "Index": data_section.get("Allgemein", {}).get("DokumentUrl", ""),
-                })
+                flat_results.append(
+                    {
+                        "Dokumentnummer": technisch.get("ID", ""),
+                        "Kurztitel": bundesrecht.get("Kurztitel", ""),
+                        "Titel": bundesrecht.get("Titel", ""),
+                        "Index": data_section.get("Allgemein", {}).get("DokumentUrl", ""),
+                    }
+                )
 
             return flat_results
 

@@ -10,10 +10,11 @@ Modules:
 - deepseek_handler: DeepSeek (OpenAI-compatible) API handling
 """
 
-from dealguard.domain.chat.service_v2 import ChatService, ChatMessage, ToolExecution
-from dealguard.domain.chat.tool_executor import ToolExecutor
 from dealguard.domain.chat.anthropic_handler import AnthropicHandler
 from dealguard.domain.chat.deepseek_handler import DeepSeekHandler
+from dealguard.domain.chat.service_v2 import ChatService, ToolExecution
+from dealguard.domain.chat.tool_executor import ToolExecutor
+from dealguard.domain.chat.types import ChatMessage
 
 __all__ = [
     "ChatService",

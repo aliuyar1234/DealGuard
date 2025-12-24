@@ -4,16 +4,21 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from dealguard.config import Settings, get_settings
 
 # Engine and session factory (lazy initialized)
-_engine = None
-_async_session_factory = None
+_engine: AsyncEngine | None = None
+_async_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-def get_engine(settings: Settings | None = None):
+def get_engine(settings: Settings | None = None) -> AsyncEngine:
     """Get or create the async database engine."""
     global _engine
     if _engine is None:
@@ -25,10 +30,11 @@ def get_engine(settings: Settings | None = None):
             max_overflow=settings.database_max_overflow,
             echo=settings.app_debug,
         )
+    assert _engine is not None
     return _engine
 
 
-def get_session_factory(settings: Settings | None = None):
+def get_session_factory(settings: Settings | None = None) -> async_sessionmaker[AsyncSession]:
     """Get or create the async session factory."""
     global _async_session_factory
     if _async_session_factory is None:
@@ -40,6 +46,7 @@ def get_session_factory(settings: Settings | None = None):
             autocommit=False,
             autoflush=False,
         )
+    assert _async_session_factory is not None
     return _async_session_factory
 
 

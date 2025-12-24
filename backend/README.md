@@ -142,9 +142,9 @@ backend/
 ### Chat (AI Legal Assistant)
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/chat/v2` | Chat with real legal data |
-| GET | `/api/v1/chat/v2/tools` | Available tools |
-| GET | `/api/v1/chat/v2/health` | Health check |
+| POST | `/api/v2/chat` | Chat with real legal data |
+| GET | `/api/v2/chat/tools` | Available tools |
+| GET | `/api/v2/chat/health` | Health check |
 
 ### Proactive
 | Method | Path | Description |

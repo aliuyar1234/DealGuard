@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import ForeignKey, String
@@ -16,8 +16,8 @@ from dealguard.infrastructure.database.models.base import (
 )
 
 if TYPE_CHECKING:
-    from dealguard.infrastructure.database.models.organization import Organization
     from dealguard.infrastructure.database.models.contract import Contract
+    from dealguard.infrastructure.database.models.organization import Organization
     from dealguard.infrastructure.database.models.partner import Partner
 
 
@@ -70,7 +70,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     last_login_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     # User settings
-    settings: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Relationships
     organization: Mapped["Organization"] = relationship(

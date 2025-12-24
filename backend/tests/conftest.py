@@ -1,11 +1,11 @@
 """
 Pytest configuration and fixtures for DealGuard backend tests.
 """
+
 import asyncio
 import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,12 +14,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-os.environ.setdefault("APP_SECRET_KEY", "test-secret-key-for-encryption-32chars")
+os.environ.setdefault("APP_SECRET_KEY", "00000000000000000000000000000000")
 
 from dealguard.config import Settings
 from dealguard.infrastructure.database.models.base import Base
@@ -27,15 +25,12 @@ from dealguard.infrastructure.database.models.organization import Organization
 from dealguard.infrastructure.database.models.user import User
 from dealguard.main import create_app
 
-
 # Use Docker PostgreSQL for integration tests
 TEST_DATABASE_URL = os.getenv(
-    "TEST_DATABASE_URL",
-    "postgresql+asyncpg://dealguard:dealguard@localhost:5432/dealguard_test"
+    "TEST_DATABASE_URL", "postgresql+asyncpg://dealguard:dealguard@localhost:5432/dealguard_test"
 )
 TEST_DATABASE_SYNC_URL = os.getenv(
-    "TEST_DATABASE_SYNC_URL",
-    "postgresql://dealguard:dealguard@localhost:5432/dealguard_test"
+    "TEST_DATABASE_SYNC_URL", "postgresql://dealguard:dealguard@localhost:5432/dealguard_test"
 )
 TEST_REDIS_URL = os.getenv(
     "TEST_REDIS_URL",
@@ -61,14 +56,14 @@ def test_settings() -> Settings:
         supabase_url="https://test.supabase.co",
         supabase_anon_key="test-anon-key",
         supabase_service_role_key="test-service-key",
-        supabase_jwt_secret="test-jwt-secret-at-least-32-chars-long",
+        supabase_jwt_secret="00000000000000000000000000000000",
         anthropic_api_key="test-api-key",
         s3_bucket="test-bucket",
         s3_endpoint="http://localhost:9000",
         s3_access_key="minio",
         s3_secret_key="minio123",
         app_env="development",
-        app_secret_key="test-secret-key-for-encryption-32chars",
+        app_secret_key="00000000000000000000000000000000",
     )
 
 
@@ -95,7 +90,7 @@ async def async_engine(test_settings: Settings):
         pytest.skip(f"Postgres unavailable for integration tests: {exc}")
 
     yield engine
- 
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 
@@ -181,12 +176,14 @@ def auth_headers(mock_auth_user: dict[str, Any]) -> dict[str, str]:
     """Create auth headers for API requests."""
     # In real tests, we'd create a proper JWT token
     # For unit tests, we'll mock the auth middleware
+    _ = mock_auth_user
     return {"Authorization": "Bearer test-token"}
 
 
 @pytest.fixture
 def app(test_settings: Settings) -> FastAPI:
     """Create test FastAPI application."""
+    _ = test_settings
     return create_app()
 
 

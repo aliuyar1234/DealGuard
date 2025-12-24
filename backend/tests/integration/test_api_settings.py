@@ -4,22 +4,22 @@ Tests the ORM-based settings endpoints.
 """
 
 import os
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import pytest
+
 # Set required env vars
-os.environ["APP_SECRET_KEY"] = "test-secret-key-for-encryption-32chars"
+os.environ["APP_SECRET_KEY"] = "00000000000000000000000000000000"
 
 
 @pytest.fixture(autouse=True)
 def mock_crypto_settings():
     """Mock get_settings for all settings API tests."""
     with patch("dealguard.shared.crypto.get_settings") as mock:
-        mock.return_value = MagicMock(
-            app_secret_key="test-secret-key-for-encryption-32chars"
-        )
+        mock.return_value = MagicMock(app_secret_key="00000000000000000000000000000000")
         from dealguard.shared.crypto import _get_fernet
+
         _get_fernet.cache_clear()
         yield mock
         _get_fernet.cache_clear()
@@ -46,7 +46,7 @@ class TestGetUserSettings:
     async def test_get_settings_decrypts_api_keys(self):
         """Test that API keys are decrypted."""
         from dealguard.api.routes.settings import get_user_settings
-        from dealguard.shared.crypto import encrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, encrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -88,7 +88,7 @@ class TestGetUserSettings:
     async def test_get_settings_skip_decryption(self):
         """Test that decrypt_keys=False skips decryption."""
         from dealguard.api.routes.settings import get_user_settings
-        from dealguard.shared.crypto import encrypt_secret, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, encrypt_secret
 
         _get_fernet.cache_clear()
 
@@ -175,6 +175,7 @@ class TestUpdateAPIKeysRequest:
     def test_update_request_key_min_length(self):
         """Test UpdateAPIKeysRequest key minimum length validation."""
         from pydantic import ValidationError
+
         from dealguard.api.routes.settings import UpdateAPIKeysRequest
 
         with pytest.raises(ValidationError):
@@ -188,7 +189,7 @@ class TestSettingsResponse:
 
     def test_settings_response_model(self):
         """Test SettingsResponse creation."""
-        from dealguard.api.routes.settings import SettingsResponse, APIKeysResponse
+        from dealguard.api.routes.settings import APIKeysResponse, SettingsResponse
 
         response = SettingsResponse(
             api_keys=APIKeysResponse(
@@ -210,7 +211,7 @@ class TestEncryptionInUpdateFlow:
     @pytest.mark.asyncio
     async def test_api_keys_encrypted_before_storage(self):
         """Test that API keys are encrypted before being stored."""
-        from dealguard.shared.crypto import is_encrypted, _get_fernet
+        from dealguard.shared.crypto import _get_fernet, is_encrypted
 
         _get_fernet.cache_clear()
 
@@ -218,33 +219,38 @@ class TestEncryptionInUpdateFlow:
         stored_updates = {}
 
         async def capture_updates(db, user_id, updates):
+            _ = (db, user_id)
             stored_updates.update(updates)
 
-        with patch("dealguard.api.routes.settings.update_user_settings", side_effect=capture_updates):
-            with patch("dealguard.api.routes.settings.get_user_settings") as mock_get:
-                mock_get.return_value = {"ai_provider": "anthropic"}
+        with (
+            patch(
+                "dealguard.api.routes.settings.update_user_settings", side_effect=capture_updates
+            ),
+            patch("dealguard.api.routes.settings.get_user_settings") as mock_get,
+        ):
+            mock_get.return_value = {"ai_provider": "anthropic"}
 
-                with patch("dealguard.api.routes.settings.get_settings") as mock_settings:
-                    mock_settings.return_value = MagicMock(
-                        anthropic_api_key="",
-                        deepseek_api_key="",
-                        ai_provider="anthropic",
-                        single_tenant_mode=True,
-                    )
+            with patch("dealguard.api.routes.settings.get_settings") as mock_settings:
+                mock_settings.return_value = MagicMock(
+                    anthropic_api_key="",
+                    deepseek_api_key="",
+                    ai_provider="anthropic",
+                    single_tenant_mode=True,
+                )
 
-                    from dealguard.api.routes.settings import update_api_keys, UpdateAPIKeysRequest
-                    from dealguard.infrastructure.auth.provider import AuthUser
+                from dealguard.api.routes.settings import UpdateAPIKeysRequest, update_api_keys
+                from dealguard.infrastructure.auth.provider import AuthUser
 
-                    mock_db = AsyncMock()
-                    mock_user = MagicMock(spec=AuthUser)
-                    mock_user.id = str(uuid4())
-                    mock_user.organization_id = str(uuid4())
+                mock_db = AsyncMock()
+                mock_user = MagicMock(spec=AuthUser)
+                mock_user.id = str(uuid4())
+                mock_user.organization_id = str(uuid4())
 
-                    request = UpdateAPIKeysRequest(
-                        anthropic_api_key="sk-ant-test-key-12345",
-                    )
+                request = UpdateAPIKeysRequest(
+                    anthropic_api_key="sk-ant-test-key-12345",
+                )
 
-                    await update_api_keys(request, mock_user, mock_db)
+                await update_api_keys(request, mock_user, mock_db)
 
         # The stored key should be encrypted
         assert "anthropic_api_key" in stored_updates

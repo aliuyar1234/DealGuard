@@ -1,13 +1,23 @@
 """Contract analysis service - core business logic."""
 
-import asyncio
 import time
-from datetime import datetime, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from uuid import UUID
 
+from dealguard.domain.contracts.ports import (
+    AIClientPort,
+    AIResponsePort,
+    ContractAnalysisRepositoryPort,
+    ContractRepositoryPort,
+    DocumentExtractorPort,
+    ExtractedDocument,
+    StoragePort,
+    TransactionPort,
+)
 from dealguard.infrastructure.ai.prompts.contract_analysis_v1 import (
     ContractAnalysisPromptV1,
+    ContractAnalysisResult,
 )
 from dealguard.infrastructure.database.models.contract import (
     AnalysisStatus,
@@ -16,14 +26,7 @@ from dealguard.infrastructure.database.models.contract import (
     ContractFinding,
     ContractType,
 )
-from dealguard.domain.contracts.ports import (
-    AIClientPort,
-    ContractAnalysisRepositoryPort,
-    ContractRepositoryPort,
-    DocumentExtractorPort,
-    ExtractedDocument,
-    StoragePort,
-)
+from dealguard.shared.concurrency import to_thread_limited
 from dealguard.shared.exceptions import AnalysisFailedError, NotFoundError, QuotaExceededError
 from dealguard.shared.logging import get_logger
 
@@ -44,12 +47,14 @@ class ContractAnalysisService:
         ai_client: AIClientPort,
         storage: StoragePort,
         extractor: DocumentExtractorPort,
+        transaction: TransactionPort,
     ) -> None:
         self.contract_repo = contract_repo
         self.analysis_repo = analysis_repo
         self.ai_client = ai_client
         self.storage = storage
         self.extractor = extractor
+        self.transaction = transaction
 
     async def upload_contract(
         self,
@@ -90,9 +95,13 @@ class ContractAnalysisService:
                 existing_id=str(existing.id),
             )
             # Return existing contract instead of creating duplicate
+            await self.contract_repo.replace_search_tokens(existing.id, extracted.text)
             return existing
 
         await self._check_quota(organization_id)
+
+        # Release the DB connection before long-running network I/O (S3 upload).
+        await self.transaction.commit()
 
         # Upload to S3
         file_path, _ = await self.storage.upload(
@@ -117,6 +126,7 @@ class ContractAnalysisService:
         )
 
         contract = await self.contract_repo.create(contract)
+        await self.contract_repo.replace_search_tokens(contract.id, extracted.text)
 
         logger.info(
             "contract_uploaded",
@@ -139,16 +149,14 @@ class ContractAnalysisService:
         if limit >= 999999:
             return
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         if start.month == 12:
             end = start.replace(year=start.year + 1, month=1)
         else:
             end = start.replace(month=start.month + 1)
 
-        used = await self.contract_repo.count_created_between(
-            start, end, include_deleted=True
-        )
+        used = await self.contract_repo.count_created_between(start, end, include_deleted=True)
         if used >= limit:
             raise QuotaExceededError("Vertragsanalysen", limit)
 
@@ -166,11 +174,12 @@ class ContractAnalysisService:
         contract = await self._load_contract(contract_id)
         await self.contract_repo.update_status(contract, AnalysisStatus.PROCESSING)
 
+        # Release the DB connection before long-running network I/O (AI call).
+        await self.transaction.commit()
+
         start_time = time.monotonic()
         try:
-            result, ai_response, prompt_version = await self._run_ai_analysis(
-                contract, contract_id
-            )
+            result, ai_response, prompt_version = await self._run_ai_analysis(contract, contract_id)
             analysis, findings = self._build_analysis(
                 contract_id,
                 result,
@@ -220,6 +229,9 @@ class ContractAnalysisService:
         if not contract:
             raise NotFoundError("Vertrag", str(contract_id))
 
+        # Release the DB connection before long-running network I/O (S3 delete).
+        await self.transaction.commit()
+
         # Delete from S3
         await self.storage.delete(contract.file_path)
 
@@ -234,9 +246,7 @@ class ContractAnalysisService:
         filename: str,
         mime_type: str,
     ) -> ExtractedDocument:
-        return await asyncio.to_thread(
-            self.extractor.extract, content, filename, mime_type
-        )
+        return await to_thread_limited(self.extractor.extract, content, filename, mime_type)
 
     async def _load_contract(self, contract_id: UUID) -> Contract:
         contract = await self.contract_repo.get_by_id(contract_id)
@@ -248,12 +258,19 @@ class ContractAnalysisService:
         self,
         contract: Contract,
         contract_id: UUID,
-    ):
+    ) -> tuple[ContractAnalysisResult, AIResponsePort, str]:
         prompt = ContractAnalysisPromptV1()
         contract_type_str = self._resolve_contract_type(contract)
 
+        contract_text = contract.contract_text
+        if contract_text is None:
+            raise AnalysisFailedError(
+                message="Contract text is missing; cannot run AI analysis",
+                details={"contract_id": str(contract_id)},
+            )
+
         ai_response = await self.ai_client.analyze_contract(
-            contract_text=contract.contract_text,
+            contract_text=contract_text,
             contract_type=contract_type_str,
             resource_id=contract_id,
         )
@@ -265,13 +282,17 @@ class ContractAnalysisService:
     def _resolve_contract_type(self, contract: Contract) -> str | None:
         if not contract.contract_type:
             return None
-        return contract.contract_type.value if hasattr(contract.contract_type, "value") else contract.contract_type
+        return (
+            contract.contract_type.value
+            if hasattr(contract.contract_type, "value")
+            else contract.contract_type
+        )
 
     def _build_analysis(
         self,
         contract_id: UUID,
-        result,
-        ai_response,
+        result: ContractAnalysisResult,
+        ai_response: AIResponsePort,
         prompt_version: str,
         start_time: float,
     ) -> tuple[ContractAnalysis, list[ContractFinding]]:

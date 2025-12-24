@@ -3,20 +3,19 @@
 from uuid import UUID
 
 from dealguard.infrastructure.database.models.partner import (
-    Partner,
-    PartnerCheck,
-    CheckType,
     CheckStatus,
+    CheckType,
+    PartnerCheck,
 )
 from dealguard.infrastructure.database.repositories.partner import (
-    PartnerRepository,
     PartnerCheckRepository,
+    PartnerRepository,
 )
 from dealguard.infrastructure.external.base import (
     CompanyDataProvider,
     CreditProvider,
-    SanctionProvider,
     InsolvencyProvider,
+    SanctionProvider,
 )
 from dealguard.shared.exceptions import NotFoundError
 from dealguard.shared.logging import get_logger
@@ -172,7 +171,9 @@ class PartnerCheckService:
             result = await self.credit_provider.check_credit(
                 company_name=partner.name,
                 handelsregister_id=partner.handelsregister_id,
-                address=f"{partner.street}, {partner.postal_code} {partner.city}" if partner.street else None,
+                address=f"{partner.street}, {partner.postal_code} {partner.city}"
+                if partner.street
+                else None,
             )
 
             check.status = CheckStatus.COMPLETED

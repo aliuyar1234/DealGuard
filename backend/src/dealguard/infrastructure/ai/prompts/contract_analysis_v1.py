@@ -29,7 +29,7 @@ class ContractFindingData:
     title: str
     description: str
     original_clause_text: str | None
-    clause_location: dict | None
+    clause_location: dict[str, Any] | None
     suggested_change: str | None
     market_comparison: str | None
 

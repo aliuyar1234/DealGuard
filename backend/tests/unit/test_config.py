@@ -4,8 +4,8 @@ Tests Settings validation and required fields.
 """
 
 import os
+
 import pytest
-from unittest.mock import patch
 
 
 class TestAppSecretKeyValidation:
@@ -23,6 +23,7 @@ class TestAppSecretKeyValidation:
         try:
             # Clear settings cache
             from dealguard.config import get_settings
+
             get_settings.cache_clear()
 
             # Import Settings fresh
@@ -126,11 +127,11 @@ class TestSettingsProperties:
             _env_file=None,
             database_url="postgresql+asyncpg://test:test@localhost/test",
             database_sync_url="postgresql://test:test@localhost/test",
-            app_secret_key="test-secret-key-for-encryption-32chars",
+            app_secret_key="00000000000000000000000000000000",
             app_env="production",
             app_debug=False,
             auth_provider="supabase",
-            supabase_jwt_secret="test-jwt-secret-at-least-32-chars-long",
+            supabase_jwt_secret="00000000000000000000000000000000",
             redis_url="redis://:test-redis@localhost:6379/1",
             s3_access_key="test-access-key",
             s3_secret_key="test-secret-key",

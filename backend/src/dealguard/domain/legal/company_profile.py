@@ -4,11 +4,11 @@ Stores legal context about the company in Organization.settings.
 This context is used by the AI to provide better answers.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.infrastructure.database.models.organization import Organization
@@ -44,12 +44,12 @@ class CompanyProfile:
     # Custom legal guidelines/concerns
     custom_guidelines: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "CompanyProfile":
+    def from_dict(cls, data: dict[str, Any]) -> "CompanyProfile":
         """Create from dictionary."""
         if not data:
             return cls()

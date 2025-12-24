@@ -24,6 +24,7 @@ class DevAuthProvider(AuthProvider):
 
     async def verify_token(self, token: str) -> AuthUser:
         """Accept any token and return a mock dev user."""
+        _ = token
         logger.warning(
             "dev_auth_used",
             message="Using development auth - DO NOT USE IN PRODUCTION",
@@ -40,6 +41,7 @@ class DevAuthProvider(AuthProvider):
 
     async def get_user(self, user_id: str) -> AuthUser | None:
         """Return mock user for any ID."""
+        _ = user_id
         return AuthUser(
             id=DEV_USER_ID,
             email="dev@dealguard.local",
@@ -58,6 +60,7 @@ class DevAuthProvider(AuthProvider):
         full_name: str | None = None,
     ) -> AuthUser:
         """Return mock user."""
+        _ = password
         return AuthUser(
             id=DEV_USER_ID,
             email=email,
@@ -79,6 +82,7 @@ class DevAuthProvider(AuthProvider):
         full_name: str | None = None,
     ) -> AuthUser:
         """Return mock user with updated data."""
+        _ = user_id
         return AuthUser(
             id=DEV_USER_ID,
             email="dev@dealguard.local",

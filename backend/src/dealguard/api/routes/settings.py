@@ -7,21 +7,22 @@ In single-tenant mode (self-hosted), users manage their own API keys.
 API keys are encrypted using Fernet symmetric encryption.
 """
 
-import json
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import literal, update
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dealguard.api.deps import get_current_user, get_db, get_user_settings
-from dealguard.config import get_settings, DEFAULT_ORGANIZATION_ID
+from dealguard.api.schemas import APIRequestModel
+from dealguard.config import get_settings
 from dealguard.infrastructure.auth.provider import AuthUser
 from dealguard.infrastructure.database.models.user import User
-from dealguard.shared.crypto import encrypt_secret, decrypt_secret, is_encrypted
+from dealguard.shared.crypto import encrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class APIKeysResponse(BaseModel):
     ai_provider: Literal["anthropic", "deepseek"] = Field(description="Current AI provider")
 
 
-class UpdateAPIKeysRequest(BaseModel):
+class UpdateAPIKeysRequest(APIRequestModel):
     """Request to update API keys."""
 
     anthropic_api_key: str | None = Field(
@@ -69,9 +70,10 @@ class SettingsResponse(BaseModel):
 # ----- Helper Functions -----
 
 
-async def update_user_settings(db: AsyncSession, user_id: str, updates: dict) -> None:
+async def update_user_settings(db: AsyncSession, user_id: str, updates: dict[str, Any]) -> None:
     """Update user settings in database using ORM."""
     from uuid import UUID
+
     from sqlalchemy import func
 
     # Merge new settings with existing ones using PostgreSQL jsonb concatenation
@@ -79,7 +81,9 @@ async def update_user_settings(db: AsyncSession, user_id: str, updates: dict) ->
         update(User)
         .where(User.id == UUID(user_id))
         .values(
-            settings=func.coalesce(User.settings, {}) + updates
+            settings=func.coalesce(User.settings, literal({}, type_=JSONB)).op("||")(
+                literal(updates, type_=JSONB)
+            )
         )
     )
     await db.commit()
@@ -132,12 +136,11 @@ async def update_api_keys(
     user_id = current_user.id
 
     # Validate Anthropic key format
-    if request.anthropic_api_key:
-        if not request.anthropic_api_key.startswith("sk-ant-"):
-            raise HTTPException(
-                status_code=400,
-                detail="Anthropic API Key muss mit 'sk-ant-' beginnen",
-            )
+    if request.anthropic_api_key and not request.anthropic_api_key.startswith("sk-ant-"):
+        raise HTTPException(
+            status_code=400,
+            detail="Anthropic API Key muss mit 'sk-ant-' beginnen",
+        )
 
     # Build settings update
     updates = {}
@@ -179,30 +182,27 @@ async def delete_api_key(
     key_type: Literal["anthropic", "deepseek"],
     current_user: AuthUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, str]:
     """Delete a specific API key."""
     from uuid import UUID
-    from sqlalchemy import func
 
     user_id = current_user.id
     key_name = f"{key_type}_api_key"
 
     # Remove key from JSONB settings using PostgreSQL - operator
     await db.execute(
-        update(User)
-        .where(User.id == UUID(user_id))
-        .values(settings=User.settings - key_name)
+        update(User).where(User.id == UUID(user_id)).values(settings=User.settings - key_name)
     )
     await db.commit()
 
     return {"message": f"{key_type.title()} API Key gelöscht"}
 
 
-@router.get("/check-ai")
+@router.get("/check-ai", response_model=None)
 async def check_ai_connection(
     current_user: AuthUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, object] | JSONResponse:
     """Test the AI connection with current settings."""
     settings = get_settings()
     user_id = current_user.id
@@ -213,32 +213,59 @@ async def check_ai_connection(
     if ai_provider == "anthropic":
         api_key = user_settings.get("anthropic_api_key") or settings.anthropic_api_key
         if not api_key:
-            return {"status": "error", "message": "Anthropic API Key nicht konfiguriert"}
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "validation_error",
+                    "message": "Anthropic API key is not configured",
+                    "details": {"provider": "anthropic"},
+                },
+            )
 
         try:
             import anthropic
+
             # Use async client to avoid blocking the event loop
-            client = anthropic.AsyncAnthropic(api_key=api_key)
+            anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
             # Simple test - just check if key is valid
-            response = await client.messages.create(
+            await anthropic_client.messages.create(
                 model="claude-3-haiku-20240307",  # Cheapest model for testing
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            return {"status": "ok", "message": "Anthropic Verbindung erfolgreich", "model": settings.anthropic_model}
-        except Exception as e:
-            return {"status": "error", "message": f"Anthropic Fehler: {str(e)}"}
+            return {
+                "status": "ok",
+                "message": "Anthropic connection successful",
+                "model": settings.anthropic_model,
+            }
+        except Exception:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": "bad_gateway",
+                    "message": "Anthropic provider request failed",
+                    "details": {"provider": "anthropic"},
+                },
+            )
 
     elif ai_provider == "deepseek":
         api_key = user_settings.get("deepseek_api_key") or settings.deepseek_api_key
         if not api_key:
-            return {"status": "error", "message": "DeepSeek API Key nicht konfiguriert"}
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "validation_error",
+                    "message": "DeepSeek API key is not configured",
+                    "details": {"provider": "deepseek"},
+                },
+            )
 
         try:
             import httpx
+
             # Use async client to avoid blocking the event loop
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.post(
                     f"{settings.deepseek_base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}"},
                     json={
@@ -249,10 +276,37 @@ async def check_ai_connection(
                     timeout=10,
                 )
             if response.status_code == 200:
-                return {"status": "ok", "message": "DeepSeek Verbindung erfolgreich", "model": settings.deepseek_model}
-            else:
-                return {"status": "error", "message": f"DeepSeek Fehler: {response.text}"}
-        except Exception as e:
-            return {"status": "error", "message": f"DeepSeek Fehler: {str(e)}"}
+                return {
+                    "status": "ok",
+                    "message": "DeepSeek connection successful",
+                    "model": settings.deepseek_model,
+                }
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": "bad_gateway",
+                    "message": "DeepSeek provider request failed",
+                    "details": {
+                        "provider": "deepseek",
+                        "status_code": response.status_code,
+                    },
+                },
+            )
+        except Exception:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": "bad_gateway",
+                    "message": "DeepSeek provider request failed",
+                    "details": {"provider": "deepseek"},
+                },
+            )
 
-    return {"status": "error", "message": f"Unbekannter AI Provider: {ai_provider}"}
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "message": "Unknown AI provider",
+            "details": {"provider": ai_provider},
+        },
+    )

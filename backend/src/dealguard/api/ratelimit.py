@@ -5,7 +5,8 @@ Falls back to in-memory storage for development.
 """
 
 import logging
-from typing import Callable
+from collections.abc import Callable
+from typing import cast
 
 from fastapi import Request, Response
 from slowapi import Limiter
@@ -69,18 +70,21 @@ def get_limiter() -> Limiter:
 # Global limiter instance (lazy initialization)
 _limiter: Limiter | None = None
 
-# For backwards compatibility - creates default in-memory limiter
-limiter = _create_limiter("memory://")
+# Global limiter instance used across the app (routes + app.state)
+limiter = get_limiter()
 
 
-def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Response:
+def rate_limit_exceeded_handler(request: Request, exc: Exception) -> Response:
     """Custom handler for rate limit exceeded errors."""
+    rate_limit_exc = cast(RateLimitExceeded, exc)
     logger.warning(
         "rate_limit_exceeded",
-        path=request.url.path,
-        method=request.method,
-        key=_get_rate_limit_key(request),
-        limit=str(exc.detail),
+        extra={
+            "path": request.url.path,
+            "method": request.method,
+            "key": _get_rate_limit_key(request),
+            "limit": str(rate_limit_exc.detail),
+        },
     )
 
     return JSONResponse(
@@ -88,12 +92,14 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Res
         content={
             "error": "too_many_requests",
             "message": "Zu viele Anfragen. Bitte warten Sie einen Moment.",
-            "detail": str(exc.detail),
-            "retry_after": getattr(exc, "retry_after", 60),
+            "detail": str(rate_limit_exc.detail),
+            "retry_after": getattr(rate_limit_exc, "retry_after", 60),
         },
         headers={
-            "Retry-After": str(getattr(exc, "retry_after", 60)),
-            "X-RateLimit-Limit": str(exc.detail).split("/")[0] if "/" in str(exc.detail) else "unknown",
+            "Retry-After": str(getattr(rate_limit_exc, "retry_after", 60)),
+            "X-RateLimit-Limit": str(rate_limit_exc.detail).split("/")[0]
+            if "/" in str(rate_limit_exc.detail)
+            else "unknown",
         },
     )
 
@@ -102,15 +108,17 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Res
 # Usage: @limiter.limit("10/minute")
 
 # Standard API limits
-RATE_LIMIT_DEFAULT = "100/minute"        # General API calls
-RATE_LIMIT_AUTH = "5/minute"             # Login/Register attempts
-RATE_LIMIT_UPLOAD = "10/minute"          # File uploads
-RATE_LIMIT_AI = "20/minute"              # AI-powered endpoints (expensive)
-RATE_LIMIT_SEARCH = "30/minute"          # Search endpoints
-RATE_LIMIT_HEALTH = "60/minute"          # Health checks
+RATE_LIMIT_DEFAULT = "100/minute"  # General API calls
+RATE_LIMIT_AUTH = "5/minute"  # Login/Register attempts
+RATE_LIMIT_UPLOAD = "10/minute"  # File uploads
+RATE_LIMIT_AI = "20/minute"  # AI-powered endpoints (expensive)
+RATE_LIMIT_SEARCH = "30/minute"  # Search endpoints
+RATE_LIMIT_HEALTH = "60/minute"  # Health checks
 
 
-def get_rate_limit_decorator(limit: str) -> Callable:
+def get_rate_limit_decorator(
+    limit: str,
+) -> Callable[[Callable[..., object]], Callable[..., object]]:
     """Get a rate limit decorator with the specified limit.
 
     Args:

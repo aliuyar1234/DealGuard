@@ -7,21 +7,21 @@ This service manages the lifecycle of proactive alerts:
 - Aggregate alert statistics
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, timedelta
-from typing import Sequence
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from dealguard.infrastructure.database.models.proactive import (
-    ProactiveAlert,
-    AlertSourceType,
-    AlertType,
     AlertSeverity,
+    AlertSourceType,
     AlertStatus,
+    AlertType,
+    ProactiveAlert,
 )
 from dealguard.shared.logging import get_logger
 
@@ -129,7 +129,7 @@ class AlertService:
 
         # Exclude snoozed unless explicitly requested
         if not filter.include_snoozed:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             query = query.where(
                 or_(
                     ProactiveAlert.snoozed_until.is_(None),
@@ -138,16 +138,16 @@ class AlertService:
             )
 
         # Order by severity (critical first) then by creation date
-        severity_order = [
-            AlertSeverity.CRITICAL,
-            AlertSeverity.HIGH,
-            AlertSeverity.MEDIUM,
-            AlertSeverity.LOW,
-            AlertSeverity.INFO,
-        ]
-        # Use case/when for custom ordering
+        severity_rank = case(
+            (ProactiveAlert.severity == AlertSeverity.CRITICAL, 0),
+            (ProactiveAlert.severity == AlertSeverity.HIGH, 1),
+            (ProactiveAlert.severity == AlertSeverity.MEDIUM, 2),
+            (ProactiveAlert.severity == AlertSeverity.LOW, 3),
+            (ProactiveAlert.severity == AlertSeverity.INFO, 4),
+            else_=5,
+        )
         query = query.order_by(
-            ProactiveAlert.severity.desc(),
+            severity_rank.asc(),
             ProactiveAlert.created_at.desc(),
         )
 
@@ -155,6 +155,50 @@ class AlertService:
 
         result = await self.session.execute(query)
         return result.scalars().all()
+
+    async def count_alerts(self, filter: AlertFilter | None = None) -> int:
+        """Count alerts matching a filter (for pagination)."""
+        org_id = self._get_organization_id()
+        filter = filter or AlertFilter()
+
+        query = (
+            select(func.count())
+            .select_from(ProactiveAlert)
+            .where(ProactiveAlert.organization_id == org_id)
+        )
+
+        if filter.status:
+            query = query.where(ProactiveAlert.status.in_(filter.status))
+
+        if filter.severity:
+            query = query.where(ProactiveAlert.severity.in_(filter.severity))
+
+        if filter.alert_type:
+            query = query.where(ProactiveAlert.alert_type.in_(filter.alert_type))
+
+        if filter.source_type:
+            query = query.where(ProactiveAlert.source_type == filter.source_type)
+
+        if filter.contract_id:
+            query = query.where(ProactiveAlert.related_contract_id == filter.contract_id)
+
+        if filter.partner_id:
+            query = query.where(ProactiveAlert.related_partner_id == filter.partner_id)
+
+        if filter.due_before:
+            query = query.where(ProactiveAlert.due_date <= filter.due_before)
+
+        if not filter.include_snoozed:
+            now = datetime.now(UTC)
+            query = query.where(
+                or_(
+                    ProactiveAlert.snoozed_until.is_(None),
+                    ProactiveAlert.snoozed_until <= now,
+                )
+            )
+
+        result = await self.session.execute(query)
+        return int(result.scalar_one() or 0)
 
     async def get_alert(self, alert_id: UUID) -> ProactiveAlert | None:
         """Get a single alert by ID."""
@@ -205,43 +249,56 @@ class AlertService:
     async def get_stats(self) -> AlertStats:
         """Get alert statistics for the organization."""
         org_id = self._get_organization_id()
-
-        query = (
-            select(ProactiveAlert)
+        status_query = (
+            select(
+                func.count().label("total"),
+                func.count().filter(ProactiveAlert.status == AlertStatus.NEW).label("new"),
+                func.count().filter(ProactiveAlert.status == AlertStatus.SEEN).label("seen"),
+                func.count()
+                .filter(ProactiveAlert.status == AlertStatus.IN_PROGRESS)
+                .label("in_progress"),
+                func.count()
+                .filter(ProactiveAlert.status.in_([AlertStatus.RESOLVED, AlertStatus.DISMISSED]))
+                .label("resolved"),
+            )
+            .select_from(ProactiveAlert)
             .where(ProactiveAlert.organization_id == org_id)
         )
-        result = await self.session.execute(query)
-        alerts = result.scalars().all()
+        status_result = await self.session.execute(status_query)
+        status_row = status_result.one()
 
-        # Count by status
-        status_counts = {status: 0 for status in AlertStatus}
-        for alert in alerts:
-            status_counts[alert.status] += 1
+        severity_query = (
+            select(ProactiveAlert.severity, func.count())
+            .where(ProactiveAlert.organization_id == org_id)
+            .group_by(ProactiveAlert.severity)
+        )
+        severity_result = await self.session.execute(severity_query)
+        by_severity = {severity.value: 0 for severity in AlertSeverity}
+        for severity, count in severity_result.all():
+            by_severity[severity.value] = int(count)
 
-        # Count by severity
-        severity_counts = {severity.value: 0 for severity in AlertSeverity}
-        for alert in alerts:
-            severity_counts[alert.severity.value] += 1
-
-        # Count by type
-        type_counts: dict[str, int] = {}
-        for alert in alerts:
-            type_counts[alert.alert_type.value] = type_counts.get(alert.alert_type.value, 0) + 1
+        type_query = (
+            select(ProactiveAlert.alert_type, func.count())
+            .where(ProactiveAlert.organization_id == org_id)
+            .group_by(ProactiveAlert.alert_type)
+        )
+        type_result = await self.session.execute(type_query)
+        by_type = {alert_type.value: int(count) for alert_type, count in type_result.all()}
 
         return AlertStats(
-            total=len(alerts),
-            new=status_counts[AlertStatus.NEW],
-            seen=status_counts[AlertStatus.SEEN],
-            in_progress=status_counts[AlertStatus.IN_PROGRESS],
-            resolved=status_counts[AlertStatus.RESOLVED] + status_counts[AlertStatus.DISMISSED],
-            by_severity=severity_counts,
-            by_type=type_counts,
+            total=int(status_row.total or 0),
+            new=int(status_row.new or 0),
+            seen=int(status_row.seen or 0),
+            in_progress=int(status_row.in_progress or 0),
+            resolved=int(status_row.resolved or 0),
+            by_severity=by_severity,
+            by_type=by_type,
         )
 
     async def count_new_alerts(self) -> int:
         """Quick count of new alerts (for badge display)."""
         org_id = self._get_organization_id()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         query = (
             select(func.count())
@@ -312,7 +369,7 @@ class AlertService:
         user_id = self._get_user_id()
 
         alert.status = AlertStatus.RESOLVED
-        alert.resolved_at = datetime.now(timezone.utc)
+        alert.resolved_at = datetime.now(UTC)
         alert.resolved_by = user_id
         alert.resolution_action = action
         alert.resolution_notes = notes
@@ -340,7 +397,7 @@ class AlertService:
         user_id = self._get_user_id()
 
         alert.status = AlertStatus.DISMISSED
-        alert.resolved_at = datetime.now(timezone.utc)
+        alert.resolved_at = datetime.now(UTC)
         alert.resolved_by = user_id
         alert.resolution_action = "dismissed"
         alert.resolution_notes = notes
@@ -368,10 +425,10 @@ class AlertService:
         if until:
             snooze_until = until
         elif days:
-            snooze_until = datetime.now(timezone.utc) + timedelta(days=days)
+            snooze_until = datetime.now(UTC) + timedelta(days=days)
         else:
             # Default: snooze for 3 days
-            snooze_until = datetime.now(timezone.utc) + timedelta(days=3)
+            snooze_until = datetime.now(UTC) + timedelta(days=3)
 
         alert.status = AlertStatus.SNOOZED
         alert.snoozed_until = snooze_until
@@ -440,15 +497,17 @@ class AlertService:
         """Dismiss all alerts related to a contract."""
         org_id = self._get_organization_id()
         user_id = self._get_user_id()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         query = (
             select(ProactiveAlert)
             .where(ProactiveAlert.organization_id == org_id)
             .where(ProactiveAlert.related_contract_id == contract_id)
-            .where(ProactiveAlert.status.in_([
-                AlertStatus.NEW, AlertStatus.SEEN, AlertStatus.IN_PROGRESS
-            ]))
+            .where(
+                ProactiveAlert.status.in_(
+                    [AlertStatus.NEW, AlertStatus.SEEN, AlertStatus.IN_PROGRESS]
+                )
+            )
         )
         result = await self.session.execute(query)
         alerts = result.scalars().all()
@@ -480,7 +539,7 @@ class AlertService:
         This should be called by the background worker.
         """
         org_id = self._get_organization_id()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         query = (
             select(ProactiveAlert)

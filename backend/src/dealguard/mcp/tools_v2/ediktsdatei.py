@@ -38,13 +38,29 @@ async def dealguard_search_insolvency(params: SearchEdiktsdateiInput) -> str:
         dealguard_search_insolvency(name="ABC GmbH") → Insolvenzstatus
     """
     try:
-        from dealguard.mcp.ediktsdatei_client import EdiktsdateiClient
+        from dealguard.mcp.ediktsdatei_client import (
+            Bundesland as ClientBundesland,
+        )
+        from dealguard.mcp.ediktsdatei_client import (
+            EdiktsdateiClient,
+            InsolvenzEdikt,
+        )
 
         client = EdiktsdateiClient()
-        bundesland = params.bundesland.value if params.bundesland else None
-        results = await client.search(params.name, bundesland)
+        try:
+            client_bundesland = (
+                ClientBundesland(params.bundesland.value) if params.bundesland else None
+            )
+            search_result = await client.search_insolvenzen(
+                name=params.name,
+                bundesland=client_bundesland,
+                limit=params.limit,
+                page=1,
+            )
+        finally:
+            await client.close()
 
-        if not results:
+        if not search_result.items:
             return (
                 f"✅ Keine Insolvenzverfahren gefunden für: '{params.name}'\n\n"
                 "*Hinweis: Dies bedeutet nur, dass aktuell keine Einträge existieren. "
@@ -52,31 +68,60 @@ async def dealguard_search_insolvency(params: SearchEdiktsdateiInput) -> str:
             )
 
         if params.response_format == ResponseFormat.JSON:
+            results = []
+            for item in search_result.items[: params.limit]:
+                if isinstance(item, InsolvenzEdikt):
+                    results.append(
+                        {
+                            "name": item.schuldner_name,
+                            "aktenzeichen": item.aktenzeichen,
+                            "verfahrensart": item.verfahrensart,
+                            "status": item.status,
+                            "gericht": item.gericht,
+                            "kundmachungsdatum": item.kundmachungsdatum.isoformat(),
+                            "eroeffnungsdatum": item.eroeffnungsdatum.isoformat()
+                            if item.eroeffnungsdatum
+                            else None,
+                            "frist_forderungsanmeldung": item.frist_forderungsanmeldung.isoformat()
+                            if item.frist_forderungsanmeldung
+                            else None,
+                            "details_url": item.details_url,
+                        }
+                    )
+
             response = {
-                **format_pagination_info(len(results), min(len(results), params.limit), 0, params.limit),
+                **format_pagination_info(
+                    search_result.total,
+                    min(len(search_result.items), params.limit),
+                    0,
+                    params.limit,
+                ),
                 "search_name": params.name,
-                "results": results[:params.limit],
+                "results": results,
             }
             return json.dumps(response, indent=2, ensure_ascii=False)
 
         lines = [
             f"# ⚠️ Ediktsdatei Ergebnisse: '{params.name}'",
-            f"**ACHTUNG:** {len(results)} Einträge gefunden!",
+            f"**ACHTUNG:** {len(search_result.items)} Einträge gefunden!",
             "",
         ]
 
-        for i, item in enumerate(results[:params.limit], 1):
-            lines.append(f"## {i}. {item.get('name', 'Unbekannt')}")
-            lines.append(f"- Aktenzeichen: {item.get('aktenzeichen', '-')}")
-            lines.append(f"- Verfahrensart: {item.get('verfahrensart', '-')}")
-            lines.append(f"- Gericht: {item.get('gericht', '-')}")
-            lines.append(f"- Datum: {item.get('datum', '-')}")
+        for i, item in enumerate(search_result.items[: params.limit], 1):
+            if not isinstance(item, InsolvenzEdikt):
+                continue
+
+            lines.append(f"## {i}. {item.schuldner_name}")
+            lines.append(f"- Aktenzeichen: {item.aktenzeichen}")
+            lines.append(f"- Verfahrensart: {item.verfahrensart}")
+            lines.append(f"- Gericht: {item.gericht}")
+            lines.append(f"- Datum: {item.kundmachungsdatum.isoformat()}")
             lines.append("")
 
         lines.append("---")
         lines.append("**⚠️ Bei Treffern: Vor Vertragsabschluss rechtliche Beratung einholen!**")
 
-        return truncate_response("\n".join(lines), len(results))
+        return truncate_response("\n".join(lines), len(search_result.items))
 
     except Exception as e:
         return handle_error(e, "Ediktsdatei-Suche")

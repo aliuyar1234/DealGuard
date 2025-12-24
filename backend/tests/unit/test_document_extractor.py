@@ -8,18 +8,18 @@ Tests cover:
 - File validation (size, type)
 - OCR fallback behavior
 """
+
 import hashlib
-import io
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from dealguard.infrastructure.document.extractor import (
+    MAX_FILE_SIZE_BYTES,
+    SUPPORTED_MIME_TYPES,
     DocumentExtractor,
     ExtractedDocument,
     ExtractedTable,
-    MAX_FILE_SIZE_BYTES,
-    SUPPORTED_MIME_TYPES,
 )
 from dealguard.shared.exceptions import UnsupportedFileTypeError, ValidationError
 
@@ -150,7 +150,7 @@ class TestDocumentExtractor:
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
             "application/msword": "doc",
         }
-        assert SUPPORTED_MIME_TYPES == expected
+        assert expected == SUPPORTED_MIME_TYPES
 
     def test_max_file_size(self):
         """Test max file size is 50 MB."""
@@ -294,8 +294,8 @@ class TestPDFExtraction:
             mock_page.get_images.return_value = []
 
             mock_doc = MagicMock()
-            mock_doc.__iter__ = lambda self: iter([mock_page])
-            mock_doc.__len__ = lambda self: 1
+            mock_doc.__iter__ = lambda _self: iter([mock_page])
+            mock_doc.__len__ = lambda _self: 1
 
             mock_fitz.open.return_value = mock_doc
 
@@ -314,13 +314,13 @@ class TestPDFExtraction:
             mock_pages = []
             for i in range(3):
                 page = MagicMock()
-                page.get_text.return_value = f"Content of page {i+1}"
+                page.get_text.return_value = f"Content of page {i + 1}"
                 page.get_images.return_value = []
                 mock_pages.append(page)
 
             mock_doc = MagicMock()
-            mock_doc.__iter__ = lambda self: iter(mock_pages)
-            mock_doc.__len__ = lambda self: 3
+            mock_doc.__iter__ = lambda _self: iter(mock_pages)
+            mock_doc.__len__ = lambda _self: 3
 
             mock_fitz.open.return_value = mock_doc
 
@@ -495,25 +495,27 @@ class TestPDFPlumberIntegration:
         mock_content = b"pdf content"
 
         # Mock pdfplumber
-        with patch("dealguard.infrastructure.document.extractor.pdfplumber") as mock_plumber:
-            with patch("dealguard.infrastructure.document.extractor.PDFPLUMBER_AVAILABLE", True):
-                # Setup mock page with table
-                mock_table_data = [
-                    ["Header1", "Header2"],
-                    ["Data1", "Data2"],
-                ]
+        with (
+            patch("dealguard.infrastructure.document.extractor.pdfplumber") as mock_plumber,
+            patch("dealguard.infrastructure.document.extractor.PDFPLUMBER_AVAILABLE", True),
+        ):
+            # Setup mock page with table
+            mock_table_data = [
+                ["Header1", "Header2"],
+                ["Data1", "Data2"],
+            ]
 
-                mock_page = MagicMock()
-                mock_page.extract_tables.return_value = [mock_table_data]
+            mock_page = MagicMock()
+            mock_page.extract_tables.return_value = [mock_table_data]
 
-                mock_pdf = MagicMock()
-                mock_pdf.pages = [mock_page]
-                mock_pdf.__enter__ = lambda self: mock_pdf
-                mock_pdf.__exit__ = MagicMock(return_value=False)
+            mock_pdf = MagicMock()
+            mock_pdf.pages = [mock_page]
+            mock_pdf.__enter__ = lambda _self: mock_pdf
+            mock_pdf.__exit__ = MagicMock(return_value=False)
 
-                mock_plumber.open.return_value = mock_pdf
+            mock_plumber.open.return_value = mock_pdf
 
-                tables = extractor._extract_pdf_tables(mock_content)
+            tables = extractor._extract_pdf_tables(mock_content)
 
         assert len(tables) == 1
         assert tables[0].page_number == 1
@@ -523,25 +525,27 @@ class TestPDFPlumberIntegration:
         """Test table extraction handles None cells."""
         mock_content = b"pdf content"
 
-        with patch("dealguard.infrastructure.document.extractor.pdfplumber") as mock_plumber:
-            with patch("dealguard.infrastructure.document.extractor.PDFPLUMBER_AVAILABLE", True):
-                # Table with None values
-                mock_table_data = [
-                    ["Header", None],
-                    [None, "Value"],
-                ]
+        with (
+            patch("dealguard.infrastructure.document.extractor.pdfplumber") as mock_plumber,
+            patch("dealguard.infrastructure.document.extractor.PDFPLUMBER_AVAILABLE", True),
+        ):
+            # Table with None values
+            mock_table_data = [
+                ["Header", None],
+                [None, "Value"],
+            ]
 
-                mock_page = MagicMock()
-                mock_page.extract_tables.return_value = [mock_table_data]
+            mock_page = MagicMock()
+            mock_page.extract_tables.return_value = [mock_table_data]
 
-                mock_pdf = MagicMock()
-                mock_pdf.pages = [mock_page]
-                mock_pdf.__enter__ = lambda self: mock_pdf
-                mock_pdf.__exit__ = MagicMock(return_value=False)
+            mock_pdf = MagicMock()
+            mock_pdf.pages = [mock_page]
+            mock_pdf.__enter__.return_value = mock_pdf
+            mock_pdf.__exit__.return_value = False
 
-                mock_plumber.open.return_value = mock_pdf
+            mock_plumber.open.return_value = mock_pdf
 
-                tables = extractor._extract_pdf_tables(mock_content)
+            tables = extractor._extract_pdf_tables(mock_content)
 
         # None should be replaced with empty string
         assert tables[0].rows[0] == ["Header", ""]
@@ -551,22 +555,24 @@ class TestPDFPlumberIntegration:
         """Test that single-row tables are skipped."""
         mock_content = b"pdf content"
 
-        with patch("dealguard.infrastructure.document.extractor.pdfplumber") as mock_plumber:
-            with patch("dealguard.infrastructure.document.extractor.PDFPLUMBER_AVAILABLE", True):
-                # Single row table
-                mock_table_data = [["Only one row"]]
+        with (
+            patch("dealguard.infrastructure.document.extractor.pdfplumber") as mock_plumber,
+            patch("dealguard.infrastructure.document.extractor.PDFPLUMBER_AVAILABLE", True),
+        ):
+            # Single row table
+            mock_table_data = [["Only one row"]]
 
-                mock_page = MagicMock()
-                mock_page.extract_tables.return_value = [mock_table_data]
+            mock_page = MagicMock()
+            mock_page.extract_tables.return_value = [mock_table_data]
 
-                mock_pdf = MagicMock()
-                mock_pdf.pages = [mock_page]
-                mock_pdf.__enter__ = lambda self: mock_pdf
-                mock_pdf.__exit__ = MagicMock(return_value=False)
+            mock_pdf = MagicMock()
+            mock_pdf.pages = [mock_page]
+            mock_pdf.__enter__.return_value = mock_pdf
+            mock_pdf.__exit__.return_value = False
 
-                mock_plumber.open.return_value = mock_pdf
+            mock_plumber.open.return_value = mock_pdf
 
-                tables = extractor._extract_pdf_tables(mock_content)
+            tables = extractor._extract_pdf_tables(mock_content)
 
         # Single row table should be skipped
         assert len(tables) == 0
@@ -575,11 +581,13 @@ class TestPDFPlumberIntegration:
         """Test table extraction doesn't fail completely on error."""
         mock_content = b"pdf content"
 
-        with patch("dealguard.infrastructure.document.extractor.pdfplumber") as mock_plumber:
-            with patch("dealguard.infrastructure.document.extractor.PDFPLUMBER_AVAILABLE", True):
-                mock_plumber.open.side_effect = Exception("pdfplumber error")
+        with (
+            patch("dealguard.infrastructure.document.extractor.pdfplumber") as mock_plumber,
+            patch("dealguard.infrastructure.document.extractor.PDFPLUMBER_AVAILABLE", True),
+        ):
+            mock_plumber.open.side_effect = Exception("pdfplumber error")
 
-                tables = extractor._extract_pdf_tables(mock_content)
+            tables = extractor._extract_pdf_tables(mock_content)
 
         # Should return empty list, not raise
         assert tables == []

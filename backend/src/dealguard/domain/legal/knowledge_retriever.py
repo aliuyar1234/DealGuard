@@ -1,16 +1,20 @@
 """Knowledge retriever for searching contracts.
 
-Uses PostgreSQL Full-Text Search (FTS) with German language support
-to find relevant contract clauses for legal questions.
+Contracts are stored encrypted at rest. To enable scalable keyword search without
+decrypting all contracts, we use a separate token index table based on HMAC-hashed
+tokens.
 """
 
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dealguard.infrastructure.database.models.contract import Contract
+from dealguard.infrastructure.database.models.contract_search import ContractSearchToken
 from dealguard.shared.logging import get_logger
+from dealguard.shared.search_tokens import token_hashes_from_query
 
 logger = get_logger(__name__)
 
@@ -45,11 +49,8 @@ class ContractSearchResult:
 class KnowledgeRetriever:
     """Retrieves relevant contract content for legal questions.
 
-    Phase 1: PostgreSQL Full-Text Search (tsvector/tsquery)
-    Phase 2: Will add pgvector for semantic search
-
     The retriever:
-    1. Searches contracts using German FTS
+    1. Searches contracts using a hashed token index
     2. Extracts relevant clause windows (~500 chars)
     3. Returns context for the AI prompt
     """
@@ -75,47 +76,36 @@ class KnowledgeRetriever:
         *,
         limit: int = 5,
     ) -> list[ContractSearchResult]:
-        """Search contracts using PostgreSQL Full-Text Search.
-
-        Uses German language configuration for proper stemming
-        (e.g., "Kündigungsfristen" matches "Kündigung").
-
-        Args:
-            query: Natural language search query
-            limit: Maximum number of contracts to return
-
-        Returns:
-            List of matching contracts sorted by relevance
-        """
+        """Search contracts using the hashed token index."""
         org_id = self._get_organization_id()
 
-        # Convert query to tsquery with German stemming
-        # plainto_tsquery handles natural language input
-        sql = text("""
-            SELECT
-                id,
-                filename,
-                contract_type,
-                raw_text,
-                ts_rank(
-                    to_tsvector('german', COALESCE(raw_text, '')),
-                    plainto_tsquery('german', :query)
-                ) as relevance
-            FROM contracts
-            WHERE organization_id = :org_id
-              AND deleted_at IS NULL
-              AND raw_text IS NOT NULL
-              AND to_tsvector('german', COALESCE(raw_text, ''))
-                  @@ plainto_tsquery('german', :query)
-            ORDER BY relevance DESC
-            LIMIT :limit
-        """)
+        token_hashes = token_hashes_from_query(query)
+        if not token_hashes:
+            return []
 
-        result = await self.session.execute(
-            sql,
-            {"query": query, "org_id": org_id, "limit": limit},
+        matches = (
+            select(
+                ContractSearchToken.contract_id.label("contract_id"),
+                func.count().label("match_count"),
+            )
+            .where(ContractSearchToken.organization_id == org_id)
+            .where(ContractSearchToken.token_hash.in_(token_hashes))
+            .group_by(ContractSearchToken.contract_id)
+            .subquery()
         )
-        rows = result.fetchall()
+
+        query_stmt = (
+            select(Contract, matches.c.match_count)
+            .join(matches, Contract.id == matches.c.contract_id)
+            .where(Contract.organization_id == org_id)
+            .where(Contract.deleted_at.is_(None))
+            .where(Contract._raw_text_encrypted.is_not(None))
+            .order_by(matches.c.match_count.desc(), Contract.created_at.desc())
+            .limit(limit)
+        )
+
+        result = await self.session.execute(query_stmt)
+        rows = result.all()
 
         logger.info(
             "contract_search_completed",
@@ -124,16 +114,26 @@ class KnowledgeRetriever:
             organization_id=str(org_id),
         )
 
-        return [
-            ContractSearchResult(
-                contract_id=row.id,
-                filename=row.filename,
-                contract_type=row.contract_type,
-                raw_text=row.raw_text,
-                relevance_score=float(row.relevance),
+        results: list[ContractSearchResult] = []
+        for contract, match_count in rows:
+            contract_text = contract.contract_text
+            if not contract_text:
+                continue
+
+            relevance = float(match_count) / float(len(token_hashes))
+            results.append(
+                ContractSearchResult(
+                    contract_id=contract.id,
+                    filename=contract.filename,
+                    contract_type=contract.contract_type.value
+                    if hasattr(contract.contract_type, "value")
+                    else contract.contract_type,
+                    raw_text=contract_text,
+                    relevance_score=relevance,
+                )
             )
-            for row in rows
-        ]
+
+        return results
 
     async def get_all_contracts(
         self,
@@ -153,38 +153,36 @@ class KnowledgeRetriever:
         """
         org_id = self._get_organization_id()
 
-        sql = text("""
-            SELECT
-                id,
-                filename,
-                contract_type,
-                raw_text,
-                0.5 as relevance
-            FROM contracts
-            WHERE organization_id = :org_id
-              AND deleted_at IS NULL
-              AND raw_text IS NOT NULL
-              AND status = 'completed'
-            ORDER BY created_at DESC
-            LIMIT :limit
-        """)
-
-        result = await self.session.execute(
-            sql,
-            {"org_id": org_id, "limit": limit},
+        query_stmt = (
+            select(Contract)
+            .where(Contract.organization_id == org_id)
+            .where(Contract.deleted_at.is_(None))
+            .where(Contract._raw_text_encrypted.is_not(None))
+            .where(Contract.status == "completed")
+            .order_by(Contract.created_at.desc())
+            .limit(limit)
         )
-        rows = result.fetchall()
+        result = await self.session.execute(query_stmt)
+        contracts = result.scalars().all()
 
-        return [
-            ContractSearchResult(
-                contract_id=row.id,
-                filename=row.filename,
-                contract_type=row.contract_type,
-                raw_text=row.raw_text,
-                relevance_score=float(row.relevance),
+        results: list[ContractSearchResult] = []
+        for contract in contracts:
+            contract_text = contract.contract_text
+            if not contract_text:
+                continue
+            results.append(
+                ContractSearchResult(
+                    contract_id=contract.id,
+                    filename=contract.filename,
+                    contract_type=contract.contract_type.value
+                    if contract.contract_type is not None
+                    else None,
+                    raw_text=contract_text,
+                    relevance_score=0.5,
+                )
             )
-            for row in rows
-        ]
+
+        return results
 
     def extract_relevant_clauses(
         self,
@@ -261,16 +259,66 @@ class KnowledgeRetriever:
         """
         # Common German stop words to ignore
         stop_words = {
-            "der", "die", "das", "den", "dem", "des",
-            "ein", "eine", "einer", "einem", "einen",
-            "und", "oder", "aber", "wenn", "weil",
-            "ist", "sind", "war", "waren", "wird", "werden",
-            "hat", "haben", "hatte", "hatten",
-            "ich", "du", "er", "sie", "es", "wir", "ihr",
-            "mein", "meine", "dein", "deine", "sein", "seine",
-            "was", "wer", "wie", "wo", "wann", "warum",
-            "zu", "von", "mit", "bei", "für", "auf", "an", "in",
-            "nicht", "kein", "keine", "auch", "noch", "nur", "schon",
+            "der",
+            "die",
+            "das",
+            "den",
+            "dem",
+            "des",
+            "ein",
+            "eine",
+            "einer",
+            "einem",
+            "einen",
+            "und",
+            "oder",
+            "aber",
+            "wenn",
+            "weil",
+            "ist",
+            "sind",
+            "war",
+            "waren",
+            "wird",
+            "werden",
+            "hat",
+            "haben",
+            "hatte",
+            "hatten",
+            "ich",
+            "du",
+            "er",
+            "sie",
+            "es",
+            "wir",
+            "ihr",
+            "mein",
+            "meine",
+            "dein",
+            "deine",
+            "sein",
+            "seine",
+            "was",
+            "wer",
+            "wie",
+            "wo",
+            "wann",
+            "warum",
+            "zu",
+            "von",
+            "mit",
+            "bei",
+            "für",
+            "auf",
+            "an",
+            "in",
+            "nicht",
+            "kein",
+            "keine",
+            "auch",
+            "noch",
+            "nur",
+            "schon",
         }
 
         words = query.lower().split()

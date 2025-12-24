@@ -53,7 +53,7 @@ async def check_sanctions(
 
         await provider.close()
 
-        response = {
+        response: dict[str, Any] = {
             "status": "ok",
             "name_geprueft": name,
             "ist_sanktioniert": result.is_sanctioned,
@@ -63,15 +63,16 @@ async def check_sanctions(
         }
 
         if result.matches:
-            response["treffer"] = []
-            for match in result.matches[:5]:  # Limit to 5 matches
-                response["treffer"].append({
+            response["treffer"] = [
+                {
                     "name": match.get("name"),
                     "typ": match.get("schema"),  # Person, Company, etc.
                     "uebereinstimmung": f"{match.get('score', 0) * 100:.0f}%",
                     "listen": match.get("datasets", []),
                     "laender": match.get("countries", []),
-                })
+                }
+                for match in result.matches[:5]
+            ]
 
         if result.is_sanctioned:
             response["warnung"] = (
@@ -84,12 +85,15 @@ async def check_sanctions(
 
     except Exception as e:
         logger.exception(f"Sanctions check error: {e}")
-        return json.dumps({
-            "status": "error",
-            "message": f"Fehler bei der Sanktionsprüfung: {str(e)}",
-            "hinweis": "Die Sanktionsprüfung konnte nicht durchgeführt werden. "
-                      "Bitte manuell prüfen oder später erneut versuchen.",
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Fehler bei der Sanktionsprüfung: {str(e)}",
+                "hinweis": "Die Sanktionsprüfung konnte nicht durchgeführt werden. "
+                "Bitte manuell prüfen oder später erneut versuchen.",
+            },
+            ensure_ascii=False,
+        )
 
 
 async def check_pep(
@@ -126,7 +130,7 @@ async def check_pep(
 
         await provider.close()
 
-        response = {
+        response: dict[str, Any] = {
             "status": "ok",
             "name_geprueft": person_name,
             "ist_pep": result.get("is_pep", False),
@@ -135,14 +139,15 @@ async def check_pep(
         }
 
         if result.get("matches"):
-            response["treffer"] = []
-            for match in result["matches"][:5]:
-                response["treffer"].append({
+            response["treffer"] = [
+                {
                     "name": match.get("name"),
                     "uebereinstimmung": f"{match.get('score', 0) * 100:.0f}%",
                     "themen": match.get("topics", []),
                     "laender": match.get("countries", []),
-                })
+                }
+                for match in result["matches"][:5]
+            ]
 
         if result.get("is_pep"):
             response["hinweis"] = (
@@ -156,10 +161,13 @@ async def check_pep(
 
     except Exception as e:
         logger.exception(f"PEP check error: {e}")
-        return json.dumps({
-            "status": "error",
-            "message": f"Fehler bei der PEP-Prüfung: {str(e)}",
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Fehler bei der PEP-Prüfung: {str(e)}",
+            },
+            ensure_ascii=False,
+        )
 
 
 async def comprehensive_compliance_check(
@@ -220,7 +228,7 @@ async def comprehensive_compliance_check(
         elif risk_score >= 25:
             risk_level = "mittel"
 
-        response = {
+        response: dict[str, Any] = {
             "status": "ok",
             "geprueft": name,
             "typ": entity_type,
@@ -251,18 +259,14 @@ async def comprehensive_compliance_check(
         empfehlungen = []
 
         if sanctions_result.is_sanctioned:
-            empfehlungen.append(
-                "🚫 KEINE Geschäftsbeziehung ohne rechtliche Klärung!"
-            )
+            empfehlungen.append("🚫 KEINE Geschäftsbeziehung ohne rechtliche Klärung!")
         elif sanctions_result.matches:
             empfehlungen.append(
                 "⚠️ Mögliche Treffer auf Sanktionslisten - manuelle Prüfung empfohlen"
             )
 
         if pep_result and pep_result.get("is_pep"):
-            empfehlungen.append(
-                "📋 Enhanced Due Diligence (EDD) erforderlich (PEP)"
-            )
+            empfehlungen.append("📋 Enhanced Due Diligence (EDD) erforderlich (PEP)")
 
         if not empfehlungen:
             empfehlungen.append(
@@ -275,10 +279,13 @@ async def comprehensive_compliance_check(
 
     except Exception as e:
         logger.exception(f"Compliance check error: {e}")
-        return json.dumps({
-            "status": "error",
-            "message": f"Fehler bei der Compliance-Prüfung: {str(e)}",
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "error",
+                "message": f"Fehler bei der Compliance-Prüfung: {str(e)}",
+            },
+            ensure_ascii=False,
+        )
 
 
 # Tool definitions for MCP
@@ -286,8 +293,8 @@ SANCTIONS_TOOLS = [
     {
         "name": "check_sanctions",
         "description": "Prüft ob ein Unternehmen oder eine Person auf internationalen "
-                      "Sanktionslisten steht (EU, UN, US OFAC, UK, Schweiz). "
-                      "WICHTIG für Geschäftspartner-Prüfung und Compliance!",
+        "Sanktionslisten steht (EU, UN, US OFAC, UK, Schweiz). "
+        "WICHTIG für Geschäftspartner-Prüfung und Compliance!",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -312,7 +319,7 @@ SANCTIONS_TOOLS = [
     {
         "name": "check_pep",
         "description": "Prüft ob eine Person ein PEP (Politically Exposed Person) ist. "
-                      "Wichtig für KYC/AML Compliance und Geldwäsche-Prävention.",
+        "Wichtig für KYC/AML Compliance und Geldwäsche-Prävention.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -332,7 +339,7 @@ SANCTIONS_TOOLS = [
     {
         "name": "comprehensive_compliance_check",
         "description": "Umfassende Compliance-Prüfung: Sanktionen + PEP in einem Aufruf. "
-                      "Ideal für Onboarding neuer Geschäftspartner und Due Diligence.",
+        "Ideal für Onboarding neuer Geschäftspartner und Due Diligence.",
         "input_schema": {
             "type": "object",
             "properties": {

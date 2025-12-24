@@ -44,7 +44,10 @@ async def dealguard_search_ris(params: SearchRISInput) -> str:
         from dealguard.mcp.ris_client import RISRestClient
 
         client = RISRestClient()
-        results = await client.search_bundesrecht(params.query, params.limit)
+        try:
+            results = await client.search_bundesrecht(params.query, params.limit)
+        finally:
+            await client.close()
 
         if not results:
             return (
@@ -80,9 +83,7 @@ async def dealguard_search_ris(params: SearchRISInput) -> str:
             if abbrev and para:
                 lines.append(f"**{abbrev} {para}**")
             lines.append(f"- Dokumentnummer: `{doc_nr}`")
-            lines.append(
-                f"- → `dealguard_get_law_text(document_number=\"{doc_nr}\")` für Volltext"
-            )
+            lines.append(f'- → `dealguard_get_law_text(document_number="{doc_nr}")` für Volltext')
             lines.append("")
 
         return truncate_response("\n".join(lines), len(results))
@@ -112,7 +113,10 @@ async def dealguard_get_law_text(params: GetLawTextInput) -> str:
         from dealguard.mcp.ris_client import RISClient
 
         client = RISClient()
-        doc = await client.get_document(params.document_number)
+        try:
+            doc = await client.get_document(params.document_number)
+        finally:
+            await client.close()
 
         if doc is None:
             return (

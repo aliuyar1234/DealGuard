@@ -4,6 +4,7 @@ Unit tests for MCP (Model Context Protocol) tools.
 Tests cover all 13 tools that Claude uses to access Austrian legal data
 and DealGuard's internal database.
 """
+
 import json
 import uuid
 from datetime import date
@@ -228,6 +229,7 @@ class TestToolExecutor:
     def executor(self):
         """Create ToolExecutor instance."""
         from dealguard.domain.chat.tool_executor import ToolExecutor
+
         org_id = uuid.uuid4()
         return ToolExecutor(org_id)
 
@@ -270,6 +272,7 @@ class TestToolExecutor:
             "dealguard_search_contracts",
             {"query": "Mietvertrag"},
         )
+        assert result.error is None
 
         # Verify organization_id was passed
         call_kwargs = mock_search.call_args[1]
@@ -324,8 +327,8 @@ class TestEdiktsdateiTools:
     @patch("dealguard.mcp.tools.edikte_tools.get_edikte_client")
     async def test_search_insolvency_formats_results(self, mock_client):
         """Test insolvency search formatting."""
-        from dealguard.mcp.tools.edikte_tools import search_ediktsdatei
         from dealguard.mcp.ediktsdatei_client import EdikteSearchResult, InsolvenzEdikt
+        from dealguard.mcp.tools.edikte_tools import search_ediktsdatei
 
         mock_instance = AsyncMock()
         mock_instance.search_insolvenzen.return_value = EdikteSearchResult(
@@ -517,7 +520,11 @@ class TestToolAnnotations:
         from dealguard.mcp.server_v2 import get_tool_definitions
 
         tools = get_tool_definitions()
-        db_tools = [t for t in tools if "contract" in t["name"] or "partner" in t["name"] or "deadline" in t["name"]]
+        db_tools = [
+            t
+            for t in tools
+            if "contract" in t["name"] or "partner" in t["name"] or "deadline" in t["name"]
+        ]
 
         for tool in db_tools:
             annotations = tool.get("annotations", {})

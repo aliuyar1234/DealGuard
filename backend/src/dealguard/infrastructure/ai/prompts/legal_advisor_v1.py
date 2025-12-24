@@ -9,7 +9,6 @@ This prompt is designed to:
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
 
 from dealguard.infrastructure.ai.prompts.contract_analysis_v1 import PromptVersion
 from dealguard.shared.logging import get_logger
@@ -39,7 +38,7 @@ class LegalAdvisorResponse:
     requires_lawyer: bool
     follow_up_questions: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """Convert to dictionary for JSON serialization."""
         return {
             "answer": self.answer,
@@ -167,7 +166,7 @@ REQUIRES_LAWYER = true wenn:
         self,
         question: str,
         clauses: list[ClauseInput],
-        conversation_history: list[dict] | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> str:
         """Render the user prompt with question and contract context.
 
@@ -285,10 +284,7 @@ Antworte im JSON-Format."""
         valid_contract_ids = {clause.contract_id for clause in provided_clauses}
 
         # Build map of clause numbers to actual text
-        clause_texts = {
-            clause.number: clause.clause_text.lower()
-            for clause in provided_clauses
-        }
+        clause_texts = {clause.number: clause.clause_text.lower() for clause in provided_clauses}
 
         validated_citations = []
         hallucinated_count = 0

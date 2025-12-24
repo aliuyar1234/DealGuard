@@ -1,6 +1,7 @@
 """AI client factory - returns the configured AI provider."""
 
-from typing import Protocol, Union
+from functools import lru_cache
+from typing import Protocol
 from uuid import UUID
 
 from dealguard.config import get_settings
@@ -34,7 +35,48 @@ class AIClient(Protocol):
     ) -> AIResponse: ...
 
 
-def get_ai_client(cost_tracker: CostTracker | None = None) -> Union[AnthropicClient, DeepSeekClient]:
+@lru_cache(maxsize=1)
+def get_cost_tracker() -> CostTracker:
+    """Get a shared CostTracker instance."""
+    return CostTracker()
+
+
+def _build_ai_client(
+    *,
+    cost_tracker: CostTracker,
+) -> AnthropicClient | DeepSeekClient:
+    settings = get_settings()
+    provider = settings.ai_provider
+
+    if provider == "deepseek":
+        if not settings.deepseek_api_key:
+            raise ValueError("DEEPSEEK_API_KEY ist nicht konfiguriert")
+        logger.info(
+            "using_ai_provider",
+            provider="deepseek",
+            model=settings.deepseek_model,
+        )
+        return DeepSeekClient(cost_tracker=cost_tracker)
+
+    # Default to Anthropic
+    if not settings.anthropic_api_key:
+        raise ValueError("ANTHROPIC_API_KEY ist nicht konfiguriert")
+    logger.info(
+        "using_ai_provider",
+        provider="anthropic",
+        model=settings.anthropic_model,
+    )
+    return AnthropicClient(cost_tracker=cost_tracker)
+
+
+@lru_cache(maxsize=1)
+def _get_cached_ai_client() -> AnthropicClient | DeepSeekClient:
+    return _build_ai_client(cost_tracker=get_cost_tracker())
+
+
+def get_ai_client(
+    cost_tracker: CostTracker | None = None,
+) -> AnthropicClient | DeepSeekClient:
     """Get the configured AI client based on settings.
 
     Returns:
@@ -49,17 +91,15 @@ def get_ai_client(cost_tracker: CostTracker | None = None) -> Union[AnthropicCli
         client = get_ai_client()
         response = await client.analyze_contract(text, contract_type)
     """
-    settings = get_settings()
-    provider = settings.ai_provider
+    if cost_tracker is not None:
+        return _build_ai_client(cost_tracker=cost_tracker)
+    return _get_cached_ai_client()
 
-    if provider == "deepseek":
-        if not settings.deepseek_api_key:
-            raise ValueError("DEEPSEEK_API_KEY ist nicht konfiguriert")
-        logger.info("using_ai_provider", provider="deepseek", model=settings.deepseek_model)
-        return DeepSeekClient(cost_tracker=cost_tracker)
 
-    # Default to Anthropic
-    if not settings.anthropic_api_key:
-        raise ValueError("ANTHROPIC_API_KEY ist nicht konfiguriert")
-    logger.info("using_ai_provider", provider="anthropic", model=settings.anthropic_model)
-    return AnthropicClient(cost_tracker=cost_tracker)
+async def close_ai_client() -> None:
+    """Close and clear the shared AI client (used at app shutdown)."""
+    if _get_cached_ai_client.cache_info().currsize:
+        client = _get_cached_ai_client()
+        await client.close()
+    _get_cached_ai_client.cache_clear()
+    get_cost_tracker.cache_clear()

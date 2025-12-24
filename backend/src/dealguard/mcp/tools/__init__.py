@@ -17,18 +17,18 @@ from dealguard.mcp.tools.edikte_tools import (
     check_insolvency,
     search_ediktsdatei,
 )
+from dealguard.mcp.tools.firmenbuch_tools import (
+    check_company_austria,
+    get_firmenbuch_auszug,
+    search_firmenbuch,
+)
 from dealguard.mcp.tools.ris_tools import (
     get_law_text,
     search_ris,
 )
-from dealguard.mcp.tools.firmenbuch_tools import (
-    search_firmenbuch,
-    get_firmenbuch_auszug,
-    check_company_austria,
-)
 from dealguard.mcp.tools.sanctions_tools import (
-    check_sanctions,
     check_pep,
+    check_sanctions,
     comprehensive_compliance_check,
 )
 

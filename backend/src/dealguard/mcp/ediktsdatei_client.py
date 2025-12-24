@@ -12,6 +12,7 @@ IWG = Informationsweiterverwendungsgesetz (PSI Directive implementation)
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
@@ -106,7 +107,7 @@ class EdikteSearchResult:
     total: int  # Total number of results
     page: int  # Current page
     page_size: int  # Results per page
-    items: list[InsolvenzEdikt | VersteigerungEdikt]
+    items: Sequence[InsolvenzEdikt | VersteigerungEdikt]
 
 
 _AKTENZEICHEN_RE = re.compile(r"\b\d+\s*[A-Z]?\s*\d+/\d+\b", re.IGNORECASE)
@@ -150,9 +151,7 @@ class _EdikteHTMLParser(HTMLParser):
             self._in_cell = False
         elif tag == "tr" and self._in_row:
             if any(cell for cell in self._row_cells):
-                self.rows.append(
-                    {"cells": self._row_cells, "links": self._row_links}
-                )
+                self.rows.append({"cells": self._row_cells, "links": self._row_links})
             self._in_row = False
 
 
@@ -241,10 +240,15 @@ class EdiktsdateiClient:
             verfahrensart=data.get("verfahrensart", data.get("art", "")),
             status=data.get("status", ""),
             eroeffnungsdatum=self._parse_date(data.get("eroeffnungsdatum", data.get("eröffnung"))),
-            kundmachungsdatum=self._parse_date(data.get("kundmachungsdatum", data.get("datum"))) or date.today(),
-            frist_forderungsanmeldung=self._parse_date(data.get("fristForderungsanmeldung", data.get("frist"))),
+            kundmachungsdatum=self._parse_date(data.get("kundmachungsdatum", data.get("datum")))
+            or date.today(),
+            frist_forderungsanmeldung=self._parse_date(
+                data.get("fristForderungsanmeldung", data.get("frist"))
+            ),
             insolvenzverwalter=data.get("insolvenzverwalter", data.get("verwalter")),
-            details_url=data.get("detailsUrl", data.get("url", f"{EDIKTE_BASE_URL}/edikte/id/{data.get('id', '')}")),
+            details_url=data.get(
+                "detailsUrl", data.get("url", f"{EDIKTE_BASE_URL}/edikte/id/{data.get('id', '')}")
+            ),
         )
 
     def _parse_versteigerung(self, data: dict[str, Any]) -> VersteigerungEdikt:
@@ -268,8 +272,11 @@ class EdiktsdateiClient:
             mindestgebot=mindestgebot,
             termin=self._parse_datetime(data.get("termin", data.get("versteigerungstermin"))),
             ort=data.get("ort", data.get("versteigerungsort")),
-            kundmachungsdatum=self._parse_date(data.get("kundmachungsdatum", data.get("datum"))) or date.today(),
-            details_url=data.get("detailsUrl", data.get("url", f"{EDIKTE_BASE_URL}/edikte/id/{data.get('id', '')}")),
+            kundmachungsdatum=self._parse_date(data.get("kundmachungsdatum", data.get("datum")))
+            or date.today(),
+            details_url=data.get(
+                "detailsUrl", data.get("url", f"{EDIKTE_BASE_URL}/edikte/id/{data.get('id', '')}")
+            ),
         )
 
     async def search_insolvenzen(
@@ -336,7 +343,7 @@ class EdiktsdateiClient:
             except ValueError:
                 logger.warning(
                     "ediktsdatei_invalid_json",
-                    status=response.status_code,
+                    extra={"status": response.status_code},
                 )
                 return await self._scrape_insolvenz_search(name, bundesland, limit)
 
@@ -374,6 +381,7 @@ class EdiktsdateiClient:
         The Ediktsdatei may not have a proper JSON API, so we might need
         to scrape the HTML search results.
         """
+        _ = bundesland
         client = await self._get_client()
 
         # Build the search URL for the web interface
@@ -419,6 +427,7 @@ class EdiktsdateiClient:
             items: list[InsolvenzEdikt] = []
 
             if header_idx is not None:
+
                 def find_col(keys: tuple[str, ...]) -> int | None:
                     for i, cell in enumerate(header_cells):
                         if any(key in cell for key in keys):
@@ -439,10 +448,14 @@ class EdiktsdateiClient:
                     if not any(cells):
                         continue
 
-                    def cell_at(col_idx: int | None) -> str:
-                        if col_idx is None or col_idx >= len(cells):
+                    def cell_at(
+                        col_idx: int | None,
+                        *,
+                        _cells: list[str] = cells,
+                    ) -> str:
+                        if col_idx is None or col_idx >= len(_cells):
                             return ""
-                        return cells[col_idx].strip()
+                        return _cells[col_idx].strip()
 
                     aktenzeichen = cell_at(idx_az)
                     schuldner = cell_at(idx_name)
@@ -493,7 +506,9 @@ class EdiktsdateiClient:
                     date_match = _DATE_RE.search(row_text)
 
                     aktenzeichen = akten_match.group(0) if akten_match else ""
-                    kundmachung = self._parse_date(date_match.group(0)) if date_match else None
+                    kundmachung = (
+                        self._parse_date(date_match.group(0)) if date_match else None
+                    ) or date.today()
 
                     gericht = ""
                     for cell in row["cells"]:
@@ -534,7 +549,7 @@ class EdiktsdateiClient:
                             verfahrensart="",
                             status="",
                             eroeffnungsdatum=None,
-                            kundmachungsdatum=kundmachung or date.today(),
+                            kundmachungsdatum=kundmachung,
                             frist_forderungsanmeldung=None,
                             insolvenzverwalter=None,
                             details_url=details_url,

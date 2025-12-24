@@ -1,10 +1,9 @@
 """
 Integration tests for Partner API endpoints (Phase 2).
 """
-import uuid
-from unittest.mock import AsyncMock, patch
 
-import pytest
+import uuid
+
 from fastapi import status
 from fastapi.testclient import TestClient
 
@@ -223,8 +222,12 @@ class TestPartnerTypeEnumInAPI:
     def test_all_partner_types_valid(self):
         """Test all partner types are valid for API."""
         valid_types = [
-            "supplier", "customer", "service_provider",
-            "distributor", "partner", "other"
+            "supplier",
+            "customer",
+            "service_provider",
+            "distributor",
+            "partner",
+            "other",
         ]
 
         for ptype in valid_types:

@@ -4,15 +4,15 @@ import random
 from datetime import datetime, timedelta
 
 from dealguard.infrastructure.external.base import (
-    CompanyDataProvider,
-    CreditProvider,
-    SanctionProvider,
-    InsolvencyProvider,
-    CompanySearchResult,
     CompanyData,
+    CompanyDataProvider,
+    CompanySearchResult,
     CreditCheckResult,
-    SanctionCheckResult,
+    CreditProvider,
     InsolvencyCheckResult,
+    InsolvencyProvider,
+    SanctionCheckResult,
+    SanctionProvider,
 )
 
 
@@ -102,10 +102,7 @@ class MockCreditProvider(CreditProvider):
             (66, 80): "BB",
             (81, 100): "C",
         }
-        rating = next(
-            (r for (low, high), r in ratings.items() if low <= score <= high),
-            "B"
-        )
+        rating = next((r for (low, high), r in ratings.items() if low <= score <= high), "B")
 
         return CreditCheckResult(
             score=score,
@@ -114,7 +111,13 @@ class MockCreditProvider(CreditProvider):
             credit_limit_eur=random.choice([50000, 100000, 250000, 500000]),
             insolvency_risk="low" if score < 40 else ("medium" if score < 70 else "high"),
             summary=f"Bonität: {rating}. {'Gute' if score < 40 else 'Durchschnittliche' if score < 70 else 'Erhöhte'} Zahlungsmoral.",
-            raw_data={"mock": True, "generated_at": datetime.now().isoformat()},
+            raw_data={
+                "mock": True,
+                "generated_at": datetime.now().isoformat(),
+                "company_name": company_name,
+                "handelsregister_id": handelsregister_id,
+                "address": address,
+            },
         )
 
 
@@ -138,7 +141,13 @@ class MockSanctionProvider(SanctionProvider):
             lists_checked=["EU Sanctions", "UN Sanctions", "OFAC SDN"],
             score=0,
             summary="Keine Treffer auf Sanktionslisten gefunden.",
-            raw_data={"mock": True, "generated_at": datetime.now().isoformat()},
+            raw_data={
+                "mock": True,
+                "generated_at": datetime.now().isoformat(),
+                "company_name": company_name,
+                "country": country,
+                "aliases": aliases,
+            },
         )
 
 
@@ -165,13 +174,19 @@ class MockInsolvencyProvider(InsolvencyProvider):
                     {
                         "type": "Regelinsolvenz",
                         "court": "Amtsgericht Berlin",
-                        "date": (datetime.now() - timedelta(days=random.randint(30, 365))).isoformat(),
+                        "date": (
+                            datetime.now() - timedelta(days=random.randint(30, 365))
+                        ).isoformat(),
                         "status": "eröffnet",
                     }
                 ],
                 score=100,
                 summary="WARNUNG: Laufendes Insolvenzverfahren!",
-                raw_data={"mock": True},
+                raw_data={
+                    "mock": True,
+                    "company_name": company_name,
+                    "handelsregister_id": handelsregister_id,
+                },
             )
 
         return InsolvencyCheckResult(
@@ -179,5 +194,10 @@ class MockInsolvencyProvider(InsolvencyProvider):
             proceedings=None,
             score=0,
             summary="Keine Insolvenzverfahren gefunden.",
-            raw_data={"mock": True, "generated_at": datetime.now().isoformat()},
+            raw_data={
+                "mock": True,
+                "generated_at": datetime.now().isoformat(),
+                "company_name": company_name,
+                "handelsregister_id": handelsregister_id,
+            },
         )

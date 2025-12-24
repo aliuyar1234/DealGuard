@@ -3,10 +3,11 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from dealguard.api.middleware.auth import CurrentUser, RequireMember
+from dealguard.api.schemas import APIRequestModel
 from dealguard.domain.legal.chat_service import LegalChatService
 from dealguard.infrastructure.database.connection import SessionDep
 from dealguard.shared.logging import get_logger
@@ -61,7 +62,7 @@ class ConversationListResponse(BaseModel):
     total: int
 
 
-class AskQuestionRequest(BaseModel):
+class AskQuestionRequest(APIRequestModel):
     """Request to ask a legal question."""
 
     question: str = Field(..., min_length=3, max_length=2000)
@@ -83,7 +84,7 @@ class AskQuestionResponse(BaseModel):
     cost_cents: float | None = None
 
 
-class CreateConversationRequest(BaseModel):
+class CreateConversationRequest(APIRequestModel):
     """Request to create a new conversation."""
 
     title: str | None = Field(None, max_length=255)
@@ -96,10 +97,12 @@ class CreateConversationRequest(BaseModel):
 
 async def get_chat_service(session: SessionDep, user: CurrentUser) -> LegalChatService:
     """Get legal chat service."""
+    from uuid import UUID
+
     return LegalChatService(
         session,
         organization_id=user.organization_id,
-        user_id=user.id,
+        user_id=UUID(str(user.id)),
     )
 
 
@@ -113,7 +116,7 @@ ChatServiceDep = Annotated[LegalChatService, Depends(get_chat_service)]
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=201)
 async def create_conversation(
-    user: RequireMember,
+    _user: RequireMember,
     service: ChatServiceDep,
     request: CreateConversationRequest | None = None,
 ) -> ConversationResponse:
@@ -135,10 +138,10 @@ async def create_conversation(
 
 @router.get("/conversations", response_model=ConversationListResponse)
 async def list_conversations(
-    user: CurrentUser,
+    _user: CurrentUser,
     service: ChatServiceDep,
-    limit: int = 20,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ConversationListResponse:
     """List all legal conversations for the current organization."""
     conversations = await service.list_conversations(limit=limit, offset=offset)
@@ -166,7 +169,7 @@ async def list_conversations(
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
     conversation_id: UUID,
-    user: CurrentUser,
+    _user: CurrentUser,
     service: ChatServiceDep,
 ) -> ConversationResponse:
     """Get a conversation with all its messages."""
@@ -180,9 +183,7 @@ async def get_conversation(
             id=str(m.id),
             role=m.role.value,
             content=m.content,
-            citations=[
-                CitationResponse(**c) for c in m.message_metadata.get("citations", [])
-            ],
+            citations=[CitationResponse(**c) for c in m.message_metadata.get("citations", [])],
             confidence=m.message_metadata.get("confidence"),
             requires_lawyer=m.message_metadata.get("requires_lawyer", False),
             created_at=m.created_at.isoformat(),
@@ -202,7 +203,7 @@ async def get_conversation(
 @router.delete("/conversations/{conversation_id}", status_code=204)
 async def delete_conversation(
     conversation_id: UUID,
-    user: RequireMember,
+    _user: RequireMember,
     service: ChatServiceDep,
 ) -> None:
     """Delete a conversation."""
@@ -215,7 +216,7 @@ async def delete_conversation(
 async def ask_question_in_conversation(
     conversation_id: UUID,
     request: AskQuestionRequest,
-    user: RequireMember,
+    _user: RequireMember,
     service: ChatServiceDep,
 ) -> AskQuestionResponse:
     """Ask a legal question in an existing conversation.
@@ -265,7 +266,7 @@ async def ask_question_in_conversation(
 @router.post("/ask", response_model=AskQuestionResponse)
 async def ask_question(
     request: AskQuestionRequest,
-    user: RequireMember,
+    _user: RequireMember,
     service: ChatServiceDep,
 ) -> AskQuestionResponse:
     """Ask a legal question (creates a new conversation).

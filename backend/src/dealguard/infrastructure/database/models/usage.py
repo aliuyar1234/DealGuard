@@ -1,10 +1,9 @@
 """Usage tracking model for billing."""
 
-from datetime import datetime
 from enum import Enum
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, String, Integer, Float
+from sqlalchemy import Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from dealguard.infrastructure.database.models.base import (
@@ -45,9 +44,7 @@ class UsageLog(Base, TenantMixin, TimestampMixin):
 
     # What action
     action: Mapped[UsageAction] = mapped_column(String(50), nullable=False, index=True)
-    resource_type: Mapped[str] = mapped_column(
-        String(50), nullable=False
-    )  # e.g., "contract"
+    resource_type: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g., "contract"
     resource_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
     # AI usage
@@ -59,9 +56,7 @@ class UsageLog(Base, TenantMixin, TimestampMixin):
     cost_cents: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     # Billing period (for efficient aggregation)
-    billing_period: Mapped[str] = mapped_column(
-        String(7), nullable=False, index=True
-    )  # YYYY-MM
+    billing_period: Mapped[str] = mapped_column(String(7), nullable=False, index=True)  # YYYY-MM
 
     def __repr__(self) -> str:
         return f"<UsageLog {self.action} {self.created_at}>"

@@ -40,6 +40,7 @@ class FakeAIResponse:
 
 class FakeAIClient:
     async def analyze_contract(self, contract_text, contract_type, resource_id=None):
+        _ = (contract_text, contract_type, resource_id)
         response = {
             "contract_type_detected": "service",
             "risk_score": 15,
@@ -133,6 +134,7 @@ async def test_enqueue_to_worker_updates_status(async_session):
         ai_client=FakeAIClient(),
         storage=MagicMock(),
         extractor=MagicMock(),
+        transaction=async_session,
     )
 
     ctx = {"job_state": JobState(session=async_session, contract_service=service)}

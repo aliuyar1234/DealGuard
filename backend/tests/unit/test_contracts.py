@@ -1,11 +1,8 @@
 """
 Unit tests for Contract domain (Phase 1).
 """
-import uuid
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
+import uuid
 
 from dealguard.infrastructure.database.models.contract import (
     AnalysisStatus,
@@ -160,8 +157,14 @@ class TestContractTypes:
     def test_contract_type_values(self):
         """Test all contract type values exist."""
         expected_types = [
-            "supplier", "customer", "service", "nda",
-            "license", "lease", "employment", "other"
+            "supplier",
+            "customer",
+            "service",
+            "nda",
+            "license",
+            "lease",
+            "employment",
+            "other",
         ]
         actual_types = [t.value for t in ContractType]
         for expected in expected_types:
@@ -185,8 +188,16 @@ class TestContractTypes:
     def test_finding_category_values(self):
         """Test all finding category values exist."""
         expected_categories = [
-            "liability", "payment", "termination", "jurisdiction",
-            "ip", "confidentiality", "gdpr", "warranty", "force_majeure", "other"
+            "liability",
+            "payment",
+            "termination",
+            "jurisdiction",
+            "ip",
+            "confidentiality",
+            "gdpr",
+            "warranty",
+            "force_majeure",
+            "other",
         ]
         actual_categories = [c.value for c in FindingCategory]
         for expected in expected_categories:

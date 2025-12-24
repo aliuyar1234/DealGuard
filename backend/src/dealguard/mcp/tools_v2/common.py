@@ -15,7 +15,7 @@ def truncate_response(result: str, item_count: int = 0) -> str:
     if len(result) <= CHARACTER_LIMIT:
         return result
 
-    truncated = result[:CHARACTER_LIMIT - 500]
+    truncated = result[: CHARACTER_LIMIT - 500]
     truncation_msg = (
         f"\n\n---\n**Hinweis:** Antwort gekürzt (von {len(result)} auf {CHARACTER_LIMIT} Zeichen). "
     )
@@ -30,6 +30,7 @@ def format_pagination_info(total: int, count: int, offset: int, limit: int) -> d
         "total": total,
         "count": count,
         "offset": offset,
+        "limit": limit,
         "has_more": total > offset + count,
         "next_offset": offset + count if total > offset + count else None,
     }

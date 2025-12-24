@@ -7,29 +7,32 @@ Endpoints for:
 """
 
 from datetime import date, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dealguard.api.deps import get_db, get_current_user
-from dealguard.infrastructure.database.models.user import User
-from dealguard.infrastructure.database.models.proactive import (
-    AlertStatus,
-    AlertSeverity,
-    AlertType,
-    AlertSourceType,
-    DeadlineStatus,
-    DeadlineType,
-)
+from dealguard.api.deps import get_current_user, get_db
+from dealguard.api.schemas import APIRequestModel
 from dealguard.domain.proactive import (
-    DeadlineMonitoringService,
-    AlertService,
     AlertFilter,
+    AlertService,
+    DeadlineMonitoringService,
     RiskRadarService,
 )
+from dealguard.infrastructure.database.models.proactive import (
+    AlertSeverity,
+    AlertSourceType,
+    AlertStatus,
+    AlertType,
+    ContractDeadline,
+    DeadlineStatus,
+    DeadlineType,
+    ProactiveAlert,
+)
+from dealguard.infrastructure.database.models.user import User
 
 router = APIRouter(prefix="/proactive", tags=["Proactive AI-Jurist"])
 
@@ -67,12 +70,12 @@ class DeadlineStatsResponse(BaseModel):
     upcoming_30_days: int
 
 
-class MarkDeadlineHandledRequest(BaseModel):
+class MarkDeadlineHandledRequest(APIRequestModel):
     action: str = Field(..., description="Action taken (e.g., 'terminated', 'renewed')")
     notes: str | None = None
 
 
-class VerifyDeadlineRequest(BaseModel):
+class VerifyDeadlineRequest(APIRequestModel):
     correct_date: date | None = None
 
 
@@ -88,7 +91,7 @@ class AlertResponse(BaseModel):
     title: str
     description: str
     ai_recommendation: str | None
-    recommended_actions: list[dict]
+    recommended_actions: list[dict[str, Any]]
     related_contract_id: UUID | None
     related_contract_filename: str | None = None
     related_partner_id: UUID | None
@@ -97,6 +100,15 @@ class AlertResponse(BaseModel):
     snoozed_until: datetime | None
     due_date: date | None
     created_at: datetime
+
+
+class AlertListResponse(BaseModel):
+    """Paginated list of proactive alerts."""
+
+    items: list[AlertResponse]
+    total: int
+    limit: int
+    offset: int
 
 
 class AlertStatsResponse(BaseModel):
@@ -109,16 +121,16 @@ class AlertStatsResponse(BaseModel):
     by_type: dict[str, int]
 
 
-class ResolveAlertRequest(BaseModel):
+class ResolveAlertRequest(APIRequestModel):
     action: str = Field(..., description="Resolution action taken")
     notes: str | None = None
 
 
-class SnoozeAlertRequest(BaseModel):
+class SnoozeAlertRequest(APIRequestModel):
     days: int = Field(default=3, ge=1, le=30, description="Days to snooze")
 
 
-class DismissAlertRequest(BaseModel):
+class DismissAlertRequest(APIRequestModel):
     notes: str | None = None
 
 
@@ -164,13 +176,15 @@ class RiskSnapshotResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────
 
 
-def _deadline_to_response(d) -> DeadlineResponse:
+def _deadline_to_response(d: ContractDeadline) -> DeadlineResponse:
     """Convert deadline model to response."""
     return DeadlineResponse(
         id=d.id,
         contract_id=d.contract_id,
         contract_filename=d.contract.filename if d.contract else None,
-        deadline_type=d.deadline_type.value if isinstance(d.deadline_type, DeadlineType) else d.deadline_type,
+        deadline_type=d.deadline_type.value
+        if isinstance(d.deadline_type, DeadlineType)
+        else d.deadline_type,
         deadline_date=d.deadline_date,
         days_until=d.days_until,
         is_overdue=d.is_overdue,
@@ -184,11 +198,13 @@ def _deadline_to_response(d) -> DeadlineResponse:
     )
 
 
-def _alert_to_response(a) -> AlertResponse:
+def _alert_to_response(a: ProactiveAlert) -> AlertResponse:
     """Convert alert model to response."""
     return AlertResponse(
         id=a.id,
-        source_type=a.source_type.value if isinstance(a.source_type, AlertSourceType) else a.source_type,
+        source_type=a.source_type.value
+        if isinstance(a.source_type, AlertSourceType)
+        else a.source_type,
         source_id=a.source_id,
         alert_type=a.alert_type.value if isinstance(a.alert_type, AlertType) else a.alert_type,
         severity=a.severity.value if isinstance(a.severity, AlertSeverity) else a.severity,
@@ -219,7 +235,7 @@ async def list_deadlines(
     contract_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> list[DeadlineResponse]:
     """List upcoming deadlines."""
     service = DeadlineMonitoringService(
         db,
@@ -241,7 +257,7 @@ async def list_deadlines(
 async def get_deadline_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> DeadlineStatsResponse:
     """Get deadline statistics."""
     service = DeadlineMonitoringService(
         db,
@@ -264,7 +280,7 @@ async def mark_deadline_handled(
     request: MarkDeadlineHandledRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> DeadlineResponse:
     """Mark a deadline as handled."""
     service = DeadlineMonitoringService(
         db,
@@ -290,7 +306,7 @@ async def dismiss_deadline(
     request: DismissAlertRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> DeadlineResponse:
     """Dismiss a deadline (mark as not relevant)."""
     service = DeadlineMonitoringService(
         db,
@@ -315,7 +331,7 @@ async def verify_deadline(
     request: VerifyDeadlineRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> DeadlineResponse:
     """Verify an AI-extracted deadline (human confirmation)."""
     service = DeadlineMonitoringService(
         db,
@@ -339,18 +355,18 @@ async def verify_deadline(
 # ─────────────────────────────────────────────────────────────
 
 
-@router.get("/alerts", response_model=list[AlertResponse])
+@router.get("/alerts", response_model=AlertListResponse)
 async def list_alerts(
-    status_filter: Annotated[list[str] | None, Query(alias="status")] = None,
-    severity_filter: Annotated[list[str] | None, Query(alias="severity")] = None,
+    status_filter: Annotated[list[AlertStatus] | None, Query(alias="status")] = None,
+    severity_filter: Annotated[list[AlertSeverity] | None, Query(alias="severity")] = None,
     include_snoozed: bool = False,
     contract_id: UUID | None = None,
     partner_id: UUID | None = None,
-    offset: int = 0,
+    offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> AlertListResponse:
     """List proactive alerts with filtering."""
     service = AlertService(
         db,
@@ -360,22 +376,28 @@ async def list_alerts(
 
     # Build filter
     filter_obj = AlertFilter(
-        status=[AlertStatus(s) for s in status_filter] if status_filter else None,
-        severity=[AlertSeverity(s) for s in severity_filter] if severity_filter else None,
+        status=status_filter,
+        severity=severity_filter,
         contract_id=contract_id,
         partner_id=partner_id,
         include_snoozed=include_snoozed,
     )
 
     alerts = await service.list_alerts(filter=filter_obj, offset=offset, limit=limit)
-    return [_alert_to_response(a) for a in alerts]
+    total = await service.count_alerts(filter=filter_obj)
+    return AlertListResponse(
+        items=[_alert_to_response(a) for a in alerts],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/alerts/stats", response_model=AlertStatsResponse)
 async def get_alert_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> AlertStatsResponse:
     """Get alert statistics."""
     service = AlertService(
         db,
@@ -398,7 +420,7 @@ async def get_alert_stats(
 async def get_new_alert_count(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> dict[str, int]:
     """Get count of new alerts (for badge display)."""
     service = AlertService(
         db,
@@ -414,7 +436,7 @@ async def get_alert(
     alert_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> AlertResponse:
     """Get a single alert by ID."""
     service = AlertService(
         db,
@@ -438,7 +460,7 @@ async def resolve_alert(
     request: ResolveAlertRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> AlertResponse:
     """Resolve an alert (action taken)."""
     service = AlertService(
         db,
@@ -464,7 +486,7 @@ async def dismiss_alert(
     request: DismissAlertRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> AlertResponse:
     """Dismiss an alert (not relevant)."""
     service = AlertService(
         db,
@@ -489,7 +511,7 @@ async def snooze_alert(
     request: SnoozeAlertRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> AlertResponse:
     """Snooze an alert for a specified number of days."""
     service = AlertService(
         db,
@@ -512,7 +534,7 @@ async def snooze_alert(
 async def mark_all_alerts_seen(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> dict[str, int]:
     """Mark all new alerts as seen."""
     service = AlertService(
         db,
@@ -533,7 +555,7 @@ async def mark_all_alerts_seen(
 async def get_risk_radar(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> RiskRadarResponse:
     """Get current risk radar overview."""
     service = RiskRadarService(db, organization_id=current_user.organization_id)
     radar = await service.get_risk_radar()
@@ -564,7 +586,7 @@ async def get_risk_history(
     days: Annotated[int, Query(ge=7, le=365)] = 30,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
+) -> list[RiskSnapshotResponse]:
     """Get risk history for trending chart."""
     service = RiskRadarService(db, organization_id=current_user.organization_id)
     snapshots = await service.get_risk_history(days=days)

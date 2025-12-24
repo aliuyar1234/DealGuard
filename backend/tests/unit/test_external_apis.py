@@ -7,27 +7,25 @@ Tests cover:
 - Fallback provider chain
 - Error handling and retries
 """
-import uuid
-from datetime import datetime
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from dealguard.infrastructure.external.openfirmenbuch import (
-    OpenFirmenbuchProvider,
-    FallbackFirmenbuchProvider,
-    OPENFIRMENBUCH_BASE_URL,
-)
-from dealguard.infrastructure.external.opensanctions import (
-    OpenSanctionsProvider,
-    PEPScreeningProvider,
-    OPENSANCTIONS_BASE_URL,
-)
 from dealguard.infrastructure.external.base import (
     CompanySearchResult,
-    CompanyData,
     SanctionCheckResult,
+)
+from dealguard.infrastructure.external.openfirmenbuch import (
+    OPENFIRMENBUCH_BASE_URL,
+    FallbackFirmenbuchProvider,
+    OpenFirmenbuchProvider,
+)
+from dealguard.infrastructure.external.opensanctions import (
+    OPENSANCTIONS_BASE_URL,
+    OpenSanctionsProvider,
+    PEPScreeningProvider,
 )
 
 
@@ -120,9 +118,7 @@ class TestOpenFirmenbuchProvider:
     @pytest.mark.asyncio
     async def test_search_companies_request_error(self, provider, mock_client):
         """Test search handles request errors."""
-        mock_client.get = AsyncMock(
-            side_effect=httpx.RequestError("Connection failed")
-        )
+        mock_client.get = AsyncMock(side_effect=httpx.RequestError("Connection failed"))
         provider._client = mock_client
 
         results = await provider.search_companies("Test", country="AT")
@@ -285,15 +281,13 @@ class TestFallbackFirmenbuchProvider:
         """Test that opendata.host is used as fallback."""
         provider.opendata_api_key = "test-key"
 
-        with patch.object(
-            provider.openfirmenbuch, "search_companies", return_value=[]
+        with (
+            patch.object(provider.openfirmenbuch, "search_companies", return_value=[]),
+            patch.object(provider, "_search_opendata_host", return_value=[]) as mock_fallback,
         ):
-            with patch.object(
-                provider, "_search_opendata_host", return_value=[]
-            ) as mock_fallback:
-                await provider.search_companies("Test", "AT", 10)
+            await provider.search_companies("Test", "AT", 10)
 
-                mock_fallback.assert_called_once_with("Test", 10)
+            mock_fallback.assert_called_once_with("Test", 10)
 
     @pytest.mark.asyncio
     async def test_close_closes_all_clients(self, provider):
