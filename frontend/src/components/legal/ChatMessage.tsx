@@ -1,6 +1,6 @@
 'use client';
 
-import { LegalMessage, Citation } from '@/lib/api/client';
+import { LegalMessage } from '@/lib/api/client';
 import { CitationList } from './CitationCard';
 
 interface ChatMessageProps {

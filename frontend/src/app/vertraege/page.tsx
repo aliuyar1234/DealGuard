@@ -1,7 +1,7 @@
 'use client';
 
 import { Shell } from '@/components/layout/Shell';
-import { Badge, Button, Card, CardContent } from '@/components/ui';
+import { Badge, type BadgeProps, Button, Card, CardContent } from '@/components/ui';
 import { useAuth } from '@/hooks/useAuth';
 import { useContracts } from '@/hooks/useContracts';
 import {
@@ -41,7 +41,7 @@ export default function ContractsPage() {
     c.filename.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const getRiskBadgeVariant = (level: string) => {
+  const getRiskBadgeVariant = (level: string): BadgeProps['variant'] => {
     switch (level) {
       case 'low':
         return 'success';
@@ -55,7 +55,7 @@ export default function ContractsPage() {
     }
   };
 
-  const getStatusBadgeVariant = (status: string) => {
+  const getStatusBadgeVariant = (status: string): BadgeProps['variant'] => {
     switch (status) {
       case 'completed':
         return 'success';
@@ -188,15 +188,13 @@ export default function ContractsPage() {
                                 {contract.analysis.risk_score}
                               </div>
                               <Badge
-                                variant={getRiskBadgeVariant(
-                                  contract.analysis.risk_level
-                                ) as any}
+                                variant={getRiskBadgeVariant(contract.analysis.risk_level)}
                               >
-                                {getRiskLabel(contract.analysis.risk_level)}
+                                {getRiskLabel(contract.analysis.risk_level)}    
                               </Badge>
                             </div>
                           ) : (
-                            <Badge variant={getStatusBadgeVariant(contract.status) as any}>
+                            <Badge variant={getStatusBadgeVariant(contract.status)}>
                               {getStatusLabel(contract.status)}
                             </Badge>
                           )}

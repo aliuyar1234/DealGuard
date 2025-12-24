@@ -11,7 +11,6 @@ export default function JuristPage() {
     conversations,
     currentConversation,
     messages,
-    isLoading,
     isSending,
     error,
     loadConversations,

@@ -9,7 +9,6 @@ import {
   deleteLegalConversation,
   LegalConversation,
   LegalMessage,
-  Citation,
   AskQuestionResponse,
 } from '@/lib/api/client';
 

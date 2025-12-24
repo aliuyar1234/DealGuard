@@ -2,7 +2,6 @@
 
 import { cn } from '@/lib/utils';
 import {
-  Bell,
   Building2,
   FileText,
   Home,
