@@ -1,0 +1,43 @@
+groups:
+  - name: availability
+    rules:
+      - alert: ServiceProbeFailed
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service probe failed"
+          description: "Blackbox probe failed for {{ $labels.instance }}."
+      - alert: PostgresExporterDown
+        expr: up{job="postgres"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres exporter down"
+          description: "Postgres exporter is not reachable."
+      - alert: RedisExporterDown
+        expr: up{job="redis"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis exporter down"
+          description: "Redis exporter is not reachable."
+      - alert: MinioMetricsDown
+        expr: up{job="minio"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO metrics down"
+          description: "MinIO metrics endpoint is not reachable."
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Target down"
+          description: "Prometheus cannot scrape one or more targets."

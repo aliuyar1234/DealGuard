@@ -41,6 +41,9 @@ DealGuard ist nicht nur ein Vertragsanalyse-Tool - es ist eine **vollständige L
 | AI | Anthropic Claude / DeepSeek (wählbar) |
 | Auth | Supabase Auth (Dev-Mode ohne Supabase möglich) |
 | Storage | S3-kompatibel (MinIO lokal) |
+| Edge/TLS | Caddy |
+| Observability | Prometheus, Grafana, Loki, Alertmanager |
+| Security | Gitleaks, Trivy, Bandit, ZAP (DAST) |
 
 ## Schnellstart
 
@@ -89,7 +92,43 @@ make migrate
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
-- MinIO Console: http://localhost:9001 (minio/minio123)
+- MinIO Console: http://localhost:9001 (MINIO_ROOT_USER / MINIO_ROOT_PASSWORD)
+
+## Production (docker-compose.prod.yml)
+
+### Secrets
+- Secrets are provided via files in `secrets/` (Docker secrets).
+- `docker compose` requires these files to exist.
+- Core: `secrets/app_secret_key.txt`, `secrets/database_url.txt`, `secrets/database_sync_url.txt`, `secrets/postgres_password.txt`, `secrets/redis_url.txt`, `secrets/redis_password.txt`, `secrets/s3_access_key.txt`, `secrets/s3_secret_key.txt`
+- Auth (Supabase, required in production): `secrets/supabase_jwt_secret.txt`, `secrets/supabase_service_role_key.txt`
+- AI (provide at least one; the unused provider can be a dummy): `secrets/anthropic_api_key.txt`, `secrets/deepseek_api_key.txt`
+- Optional (features): `secrets/minio_root_password.txt`, `secrets/grafana_admin_password.txt`, `secrets/alert_webhook_url.txt`
+
+### Start
+```bash
+# Core services only
+docker compose -f docker-compose.prod.yml up -d
+
+# Full stack (observability + MinIO)
+docker compose -f docker-compose.prod.yml --profile observability --profile minio up -d
+```
+
+### Observability
+- Prometheus: http://localhost:9090 (localhost-only, `--profile observability`)
+- Grafana: http://localhost:3001 (localhost-only, `--profile observability`)
+- Alertmanager: http://localhost:9093 (localhost-only, `--profile observability`)
+- `/metrics` is internal-only (not exposed by Caddy)
+
+### Backups & Restore
+- Postgres/MinIO backups run in `pg-backup` / `minio-backup`.
+- Restore runbook: `deploy/backup-restore-runbook.md`
+
+### CI Security (DAST)
+- GitHub Actions runs OWASP ZAP when `STAGING_BASE_URL` secret is set.
+
+### WAF/CDN (optional)
+- Guide: `deploy/cdn-waf.md`
+
 
 ## MCP Server - Austrian Legal Tools
 
@@ -146,7 +185,22 @@ DealGuard stellt 13 MCP-Tools für LLMs bereit:
 ```bash
 cd backend
 python -m pytest tests/ -v
-# 147 Tests
+```
+
+If Postgres is not on the default port, point the integration tests to your
+container:
+
+```bash
+# Example (Postgres on localhost:5433)
+TEST_DATABASE_URL=postgresql+asyncpg://dealguard:dealguard@localhost:5433/dealguard_test \
+TEST_DATABASE_SYNC_URL=postgresql://dealguard:dealguard@localhost:5433/dealguard_test \
+python -m pytest tests/ -v
+```
+
+To make Postgres-backed integration tests fail (instead of skipping) when the DB is unavailable:
+
+```bash
+REQUIRE_TEST_DB=1 python -m pytest -v
 ```
 
 ### Frontend Tests
@@ -177,7 +231,7 @@ DealGuard/
 │   │   ├── mcp/              # MCP Server + Tools
 │   │   └── shared/           # Crypto, Logging
 │   ├── alembic/              # DB Migrations
-│   └── tests/                # 147 Tests
+│   └── tests/                # Tests
 ├── frontend/
 │   ├── src/
 │   │   ├── app/              # Next.js Pages
@@ -185,7 +239,9 @@ DealGuard/
 │   │   └── hooks/            # Custom Hooks
 │   └── e2e/                  # Playwright Tests
 ├── docs/                     # Architecture Docs
-└── docker-compose.yml
+├── deploy/                  # Production configs
+├── docker-compose.yml
+└── docker-compose.prod.yml
 ```
 
 ## Architektur
@@ -213,3 +269,4 @@ Die österreichischen Datenquellen (RIS, Ediktsdatei, OpenFirmenbuch, OpenSancti
 ## Lizenz
 
 MIT License - Open Source
+

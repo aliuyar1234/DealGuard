@@ -1,16 +1,16 @@
 # Production Deployment Guide
 
 ## Overview
-
-DealGuard is designed for self-hosted single-tenant deployment. Each installation serves one organization with users managing their own AI API keys.
+DealGuard is designed for self-hosted single-tenant deployments. The production
+stack uses `docker-compose.prod.yml` and Caddy as the TLS-terminating reverse
+proxy.
 
 ## Prerequisites
-
-- Docker & Docker Compose
-- PostgreSQL 16+ (or use Docker)
-- Redis 7+ (or use Docker)
-- MinIO or S3-compatible storage
-- Domain with SSL certificate
+- Docker and Docker Compose
+- PostgreSQL 16+ (or use the bundled container)
+- Redis 7+ (or use the bundled container)
+- S3-compatible storage (MinIO via profile or managed S3)
+- Domain name with DNS pointing to the host
 - AI API key (Anthropic or DeepSeek)
 
 ## Quick Start with Docker
@@ -32,12 +32,17 @@ cp .env.example .env
 docker-compose -f docker-compose.prod.yml up -d
 ```
 
-### 4. Run Migrations
+### 4. (Optional) Use MinIO in Production
 ```bash
-docker-compose exec backend alembic upgrade head
+docker-compose -f docker-compose.prod.yml --profile minio up -d
 ```
 
-### 5. Access Application
+### 5. Run Migrations
+```bash
+docker-compose -f docker-compose.prod.yml exec backend alembic upgrade head
+```
+
+### 6. Access Application
 - Frontend: https://your-domain.com
 - API: https://your-domain.com/api/v1
 - Docs: https://your-domain.com/docs
@@ -45,14 +50,23 @@ docker-compose exec backend alembic upgrade head
 ## Environment Configuration
 
 ### Required Variables
-
 ```env
+# Application
+APP_SECRET_KEY=your-32-char-secret-key-here
+APP_ENV=production
+APP_DEBUG=false
+CORS_ORIGINS=https://your-domain.com
+
 # Database
-DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/dealguard
-DATABASE_SYNC_URL=postgresql://user:pass@db:5432/dealguard
+DB_USER=dealguard
+DB_PASSWORD=strong-password
+DB_NAME=dealguard
+DATABASE_URL=postgresql+asyncpg://dealguard:strong-password@postgres:5432/dealguard
+DATABASE_SYNC_URL=postgresql://dealguard:strong-password@postgres:5432/dealguard
 
 # Redis
-REDIS_URL=redis://redis:6379/0
+REDIS_PASSWORD=strong-redis-password
+REDIS_URL=redis://:strong-redis-password@redis:6379/0
 
 # Storage
 S3_ENDPOINT=https://s3.eu-central-1.amazonaws.com
@@ -61,19 +75,19 @@ S3_ACCESS_KEY=your-access-key
 S3_SECRET_KEY=your-secret-key
 S3_REGION=eu-central-1
 
-# Security
-APP_SECRET_KEY=your-32-char-secret-key-here-xxx
-
-# Auth (Production)
+# Auth
 AUTH_PROVIDER=supabase
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_JWT_SECRET=your-jwt-secret
+
+# Edge / TLS
+APP_DOMAIN=your-domain.com
+TLS_EMAIL=admin@your-domain.com
 ```
 
 ### Optional Variables
-
 ```env
-# AI (users can also configure in Settings)
+# AI
 AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-xxx
 DEEPSEEK_API_KEY=sk-xxx
@@ -85,165 +99,63 @@ RATE_LIMIT_AI=10/minute
 LOG_LEVEL=INFO
 ```
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Reverse Proxy                         │
-│                      (nginx/Traefik)                        │
-│                          :443                               │
-└─────────────────┬───────────────────────────┬───────────────┘
-                  │                           │
-                  ▼                           ▼
-         ┌───────────────┐           ┌───────────────┐
-         │   Frontend    │           │    Backend    │
-         │   (Next.js)   │           │   (FastAPI)   │
-         │    :3000      │           │    :8000      │
-         └───────────────┘           └───────┬───────┘
-                                             │
-                  ┌──────────────────────────┼──────────────────────────┐
-                  │                          │                          │
-                  ▼                          ▼                          ▼
-         ┌───────────────┐           ┌───────────────┐           ┌───────────────┐
-         │  PostgreSQL   │           │     Redis     │           │    MinIO/S3   │
-         │    :5432      │           │    :6379      │           │    :9000      │
-         └───────────────┘           └───────────────┘           └───────────────┘
-```
-
 ## Security Checklist
-
-### Before Going Live
 
 - [ ] `AUTH_PROVIDER=supabase` (NOT `dev`)
 - [ ] Strong `APP_SECRET_KEY` (32+ chars)
-- [ ] SSL/TLS enabled
-- [ ] Database credentials rotated
+- [ ] `APP_ENV=production` and `APP_DEBUG=false`
+- [ ] TLS enabled (Caddy with valid DNS)
+- [ ] Database and Redis credentials rotated
 - [ ] S3 bucket private
-- [ ] Rate limiting configured
-- [ ] CORS origins restricted
-
-### Production Validators
-
-DealGuard automatically enforces security in production:
-
-```python
-# config.py
-@model_validator(mode="after")
-def validate_production_settings(self) -> "Settings":
-    if self.is_production:
-        if self.auth_provider == "dev":
-            raise ValueError("AUTH_PROVIDER=dev not allowed in production!")
-        if not self.supabase_jwt_secret:
-            raise ValueError("SUPABASE_JWT_SECRET required in production!")
-    return self
-```
+- [ ] CORS origins restricted to production domains
 
 ## Health Checks
 
-### Backend Health
+### Backend
 ```bash
-curl https://your-domain.com/api/v1/health
+curl https://your-domain.com/health
 ```
 
-Expected response:
-```json
-{
-  "status": "healthy",
-  "database": "connected",
-  "redis": "connected",
-  "storage": "connected"
-}
-```
-
-### AI Health (requires auth)
+### Readiness
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  https://your-domain.com/api/v1/chat/v2/health
+curl https://your-domain.com/ready
 ```
 
 ## Scaling
 
-### Horizontal Scaling
+```bash
+# Scale workers
+docker-compose -f docker-compose.prod.yml up -d --scale worker=3
 
-```yaml
-# docker-compose.prod.yml
-services:
-  backend:
-    deploy:
-      replicas: 3
-
-  worker:
-    deploy:
-      replicas: 2
-```
-
-### Database Connection Pool
-
-```env
-# Adjust based on replicas
-DATABASE_POOL_SIZE=20
-DATABASE_MAX_OVERFLOW=10
+# Scale backend (Caddy will load-balance)
+docker-compose -f docker-compose.prod.yml up -d --scale backend=2
 ```
 
 ## Monitoring
 
 ### Logs
 ```bash
-docker-compose logs -f backend worker
+docker-compose -f docker-compose.prod.yml logs -f backend worker
 ```
 
 ### Metrics
 DealGuard exposes Prometheus metrics at `/metrics` (requires auth).
-
-### Cost Tracking
-AI costs are logged to the database. Query with:
-```sql
-SELECT date(created_at), sum(cost_usd)
-FROM ai_usage_logs
-GROUP BY 1
-ORDER BY 1 DESC;
-```
 
 ## Backup & Recovery
 
 ### Database Backup
 ```bash
 # Using pg_dump
-docker-compose exec db pg_dump -U dealguard dealguard > backup.sql
+docker-compose -f docker-compose.prod.yml exec postgres pg_dump -U dealguard dealguard > backup.sql
 
 # Restore
-docker-compose exec -T db psql -U dealguard dealguard < backup.sql
+docker-compose -f docker-compose.prod.yml exec -T postgres psql -U dealguard dealguard < backup.sql
 ```
 
 ### Document Storage
 ```bash
 # Using MinIO client
 mc mirror myminio/dealguard-documents ./backup/documents
-```
-
-## Troubleshooting
-
-### Common Issues
-
-**Auth errors in production:**
-- Check `AUTH_PROVIDER=supabase`
-- Verify `SUPABASE_JWT_SECRET` matches Supabase project
-
-**AI not responding:**
-- Check API key in Settings → API Keys
-- Test connection with "Verbindung testen" button
-- Check rate limits
-
-**Missing documents:**
-- Verify S3 credentials
-- Check bucket permissions
-- Ensure bucket exists and is accessible
-
-### Debug Mode
-
-```env
-# Enable detailed logs (NOT for production traffic)
-LOG_LEVEL=DEBUG
 ```
 
 ## Updates
@@ -253,7 +165,7 @@ LOG_LEVEL=DEBUG
 git pull origin main
 docker-compose -f docker-compose.prod.yml build
 docker-compose -f docker-compose.prod.yml up -d
-docker-compose exec backend alembic upgrade head
+docker-compose -f docker-compose.prod.yml exec backend alembic upgrade head
 ```
 
 ### Rollback
@@ -261,5 +173,5 @@ docker-compose exec backend alembic upgrade head
 git checkout v1.0.0  # Previous version
 docker-compose -f docker-compose.prod.yml build
 docker-compose -f docker-compose.prod.yml up -d
-docker-compose exec backend alembic downgrade -1
+docker-compose -f docker-compose.prod.yml exec backend alembic downgrade -1
 ```

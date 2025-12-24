@@ -1,0 +1,696 @@
+x-app-defaults: &app-defaults
+  restart: unless-stopped
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  stop_grace_period: 30s
+  read_only: true
+  tmpfs:
+    - /tmp
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    environment:
+      POSTGRES_USER: ${DB_USER:?err}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: ${DB_NAME:-dealguard}
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME:-dealguard}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: ${POSTGRES_CPU_LIMIT:-1.0}
+          memory: ${POSTGRES_MEM_LIMIT:-1g}
+        reservations:
+          cpus: ${POSTGRES_CPU_RESERVE:-0.25}
+          memory: ${POSTGRES_MEM_RESERVE:-256m}
+    networks:
+      - internal
+
+  pg-backup:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    environment:
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${PG_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${PG_BACKUP_RETENTION_DAYS:-7}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${DB_USER:?err}
+      PGDATABASE: ${DB_NAME:-dealguard}
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - pg_backups:/backups
+      - ./deploy/pg-backup.sh:/usr/local/bin/pg-backup.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/pg-backup.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    environment:
+      DATABASE_SYNC_URL_FILE: /run/secrets/database_sync_url
+    secrets:
+      - database_sync_url
+    volumes:
+      - ./deploy/postgres-exporter-entrypoint.sh:/usr/local/bin/postgres-exporter-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/postgres-exporter-entrypoint.sh"]
+    depends_on:
+      - postgres
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    secrets:
+      - redis_password
+    entrypoint: ["/bin/sh", "/usr/local/bin/redis-entrypoint.sh"]
+    volumes:
+      - redis_data:/data
+      - ./deploy/redis-entrypoint.sh:/usr/local/bin/redis-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$(cat /run/secrets/redis_password)\" ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: ${REDIS_CPU_LIMIT:-0.5}
+          memory: ${REDIS_MEM_LIMIT:-512m}
+        reservations:
+          cpus: ${REDIS_CPU_RESERVE:-0.1}
+          memory: ${REDIS_MEM_RESERVE:-128m}
+    networks:
+      - internal
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      REDIS_ADDR: redis://redis:6379
+    secrets:
+      - redis_password
+    volumes:
+      - ./deploy/redis-exporter-entrypoint.sh:/usr/local/bin/redis-exporter-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/redis-exporter-entrypoint.sh"]
+    depends_on:
+      - redis
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?err}
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    secrets:
+      - minio_root_password
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: ${MINIO_CPU_LIMIT:-1.0}
+          memory: ${MINIO_MEM_LIMIT:-1g}
+        reservations:
+          cpus: ${MINIO_CPU_RESERVE:-0.25}
+          memory: ${MINIO_MEM_RESERVE:-256m}
+    networks:
+      - internal
+    profiles:
+      - minio
+
+  minio-setup:
+    image: minio/mc:RELEASE.2024-06-13T22-53-53Z
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:?err} $(cat /run/secrets/minio_root_password); do sleep 2; done;
+      mc mb myminio/${S3_BUCKET:?err} --ignore-existing;
+      exit 0;
+      "
+    secrets:
+      - minio_root_password
+    networks:
+      - internal
+    profiles:
+      - minio
+
+  minio-backup:
+    image: minio/mc:RELEASE.2024-06-13T22-53-53Z
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    environment:
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${MINIO_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${MINIO_BACKUP_RETENTION_DAYS:-7}
+      S3_ENDPOINT: ${S3_ENDPOINT:?err}
+      S3_BUCKET: ${S3_BUCKET:?err}
+      S3_ACCESS_KEY_FILE: /run/secrets/s3_access_key
+      S3_SECRET_KEY_FILE: /run/secrets/s3_secret_key
+    secrets:
+      - s3_access_key
+      - s3_secret_key
+    volumes:
+      - minio_backups:/backups
+      - ./deploy/minio-backup.sh:/usr/local/bin/minio-backup.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/minio-backup.sh"]
+    depends_on:
+      - minio
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - minio
+
+  backend:
+    <<: *app-defaults
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_SECRET_KEY_FILE=/run/secrets/app_secret_key
+      - DATABASE_URL_FILE=/run/secrets/database_url
+      - DATABASE_SYNC_URL_FILE=/run/secrets/database_sync_url
+      - REDIS_URL_FILE=/run/secrets/redis_url
+      - S3_ENDPOINT=${S3_ENDPOINT:?err}
+      - S3_BUCKET=${S3_BUCKET:?err}
+      - S3_REGION=${S3_REGION:-eu-central-1}
+      - S3_ACCESS_KEY_FILE=/run/secrets/s3_access_key
+      - S3_SECRET_KEY_FILE=/run/secrets/s3_secret_key
+      - SUPABASE_JWT_SECRET_FILE=/run/secrets/supabase_jwt_secret
+      - SUPABASE_SERVICE_ROLE_KEY_FILE=/run/secrets/supabase_service_role_key
+      - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
+      - DEEPSEEK_API_KEY_FILE=/run/secrets/deepseek_api_key
+    secrets:
+      - app_secret_key
+      - database_url
+      - database_sync_url
+      - redis_url
+      - s3_access_key
+      - s3_secret_key
+      - supabase_jwt_secret
+      - supabase_service_role_key
+      - anthropic_api_key
+      - deepseek_api_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/ready').raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: ${BACKEND_CPU_LIMIT:-1.0}
+          memory: ${BACKEND_MEM_LIMIT:-1g}
+        reservations:
+          cpus: ${BACKEND_CPU_RESERVE:-0.25}
+          memory: ${BACKEND_MEM_RESERVE:-256m}
+    command: ["uvicorn", "dealguard.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    networks:
+      - internal
+
+  worker:
+    <<: *app-defaults
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - APP_SECRET_KEY_FILE=/run/secrets/app_secret_key
+      - DATABASE_URL_FILE=/run/secrets/database_url
+      - DATABASE_SYNC_URL_FILE=/run/secrets/database_sync_url
+      - REDIS_URL_FILE=/run/secrets/redis_url
+      - S3_ENDPOINT=${S3_ENDPOINT:?err}
+      - S3_BUCKET=${S3_BUCKET:?err}
+      - S3_REGION=${S3_REGION:-eu-central-1}
+      - S3_ACCESS_KEY_FILE=/run/secrets/s3_access_key
+      - S3_SECRET_KEY_FILE=/run/secrets/s3_secret_key
+      - SUPABASE_JWT_SECRET_FILE=/run/secrets/supabase_jwt_secret
+      - SUPABASE_SERVICE_ROLE_KEY_FILE=/run/secrets/supabase_service_role_key
+      - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
+      - DEEPSEEK_API_KEY_FILE=/run/secrets/deepseek_api_key
+    secrets:
+      - app_secret_key
+      - database_url
+      - database_sync_url
+      - redis_url
+      - s3_access_key
+      - s3_secret_key
+      - supabase_jwt_secret
+      - supabase_service_role_key
+      - anthropic_api_key
+      - deepseek_api_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os, pathlib, redis; url=os.getenv('REDIS_URL') or pathlib.Path(os.environ['REDIS_URL_FILE']).read_text().strip(); redis.Redis.from_url(url).ping()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: ${WORKER_CPU_LIMIT:-1.0}
+          memory: ${WORKER_MEM_LIMIT:-1g}
+        reservations:
+          cpus: ${WORKER_CPU_RESERVE:-0.25}
+          memory: ${WORKER_MEM_RESERVE:-256m}
+    command: ["arq", "dealguard.infrastructure.queue.worker.WorkerSettings"]
+    networks:
+      - internal
+
+  frontend:
+    <<: *app-defaults
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?err}
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?err}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:?err}
+    env_file:
+      - .env
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    expose:
+      - "3000"
+    deploy:
+      resources:
+        limits:
+          cpus: ${FRONTEND_CPU_LIMIT:-0.5}
+          memory: ${FRONTEND_MEM_LIMIT:-512m}
+        reservations:
+          cpus: ${FRONTEND_CPU_RESERVE:-0.1}
+          memory: ${FRONTEND_MEM_RESERVE:-128m}
+    networks:
+      - internal
+
+  edge:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - APP_DOMAIN=${APP_DOMAIN:?err}
+      - TLS_EMAIL=${TLS_EMAIL:?err}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: ${EDGE_CPU_LIMIT:-0.5}
+          memory: ${EDGE_MEM_LIMIT:-256m}
+        reservations:
+          cpus: ${EDGE_CPU_RESERVE:-0.1}
+          memory: ${EDGE_MEM_RESERVE:-64m}
+    networks:
+      - edge
+      - internal
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    read_only: true
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}"
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/observability/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./deploy/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+  alert-logger:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      ALERT_WEBHOOK_URL_FILE: /run/secrets/alert_webhook_url
+    secrets:
+      - alert_webhook_url
+    entrypoint: ["python", "/app/alert-logger.py"]
+    volumes:
+      - ./deploy/observability/alert-logger.py:/app/alert-logger.py:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    read_only: true
+    command: ["--config.file=/etc/blackbox_exporter/config.yml"]
+    volumes:
+      - ./deploy/observability/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+  loki:
+    image: grafana/loki:2.9.10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./deploy/observability/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+  promtail:
+    image: grafana/promtail:2.9.10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - ./deploy/observability/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail_positions:/tmp
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_admin_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+      - loki
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+    profiles:
+      - observability
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  pg_backups:
+  minio_backups:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  alertmanager_data:
+  loki_data:
+  promtail_positions:
+  grafana_data:
+
+secrets:
+  app_secret_key:
+    file: ./secrets/app_secret_key.txt
+  database_url:
+    file: ./secrets/database_url.txt
+  database_sync_url:
+    file: ./secrets/database_sync_url.txt
+  redis_url:
+    file: ./secrets/redis_url.txt
+  s3_access_key:
+    file: ./secrets/s3_access_key.txt
+  s3_secret_key:
+    file: ./secrets/s3_secret_key.txt
+  supabase_jwt_secret:
+    file: ./secrets/supabase_jwt_secret.txt
+  supabase_service_role_key:
+    file: ./secrets/supabase_service_role_key.txt
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt
+  deepseek_api_key:
+    file: ./secrets/deepseek_api_key.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  minio_root_password:
+    file: ./secrets/minio_root_password.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
+  alert_webhook_url:
+    file: ./secrets/alert_webhook_url.txt
+
+networks:
+  edge:
+  internal:
+    internal: true

@@ -2,8 +2,9 @@
 # DealGuard Backend Dockerfile
 # ===========================================
 
-# Base stage with system dependencies
-FROM python:3.12-slim AS base
+# Base stage with runtime dependencies
+ARG PYTHON_IMAGE=python:3.12.8-slim
+FROM ${PYTHON_IMAGE} AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -12,12 +13,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies
+# Install runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Build tools
-    build-essential \
-    # PostgreSQL client
-    libpq-dev \
+    # PostgreSQL runtime client
+    libpq5 \
     # PDF processing
     poppler-utils \
     # OCR
@@ -27,21 +26,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ===========================================
+# Builder stage
+# ===========================================
+FROM base AS builder
+
+# Build tools for compiling wheels
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy dependency files and source (needed for build)
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+# Install production dependencies into /install
+RUN pip install --no-cache-dir --prefix=/install .
+
+# ===========================================
 # Development stage
 # ===========================================
-FROM base AS development
+FROM builder AS development
 
-# Install uv for fast package management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-# Copy dependency files and README (needed for hatchling build)
-COPY pyproject.toml README.md ./
+# Copy source code (including tests/dev tooling)
+COPY . .
 
 # Install dependencies (with dev)
-RUN uv pip install --system -e ".[dev]"
-
-# Copy source code
-COPY . .
+RUN pip install --no-cache-dir -e ".[dev]"
 
 # Default command
 CMD ["uvicorn", "dealguard.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
@@ -51,14 +62,8 @@ CMD ["uvicorn", "dealguard.main:app", "--host", "0.0.0.0", "--port", "8000", "--
 # ===========================================
 FROM base AS production
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-# Copy dependency files and README (needed for hatchling build)
-COPY pyproject.toml README.md ./
-
-# Install production dependencies only
-RUN uv pip install --system -e .
+# Copy installed dependencies from builder
+COPY --from=builder /install /usr/local
 
 # Copy source code
 COPY src ./src
@@ -73,6 +78,9 @@ EXPOSE 8000
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8000/health')"
+
+# Stop signal for graceful shutdown
+STOPSIGNAL SIGTERM
 
 # Default command
 CMD ["uvicorn", "dealguard.main:app", "--host", "0.0.0.0", "--port", "8000"]
